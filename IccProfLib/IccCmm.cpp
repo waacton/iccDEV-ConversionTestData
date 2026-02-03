@@ -7512,6 +7512,15 @@ icStatusCMM CIccXformMpe::Begin()
   if (!m_pTag) {
     return icCmmStatInvalidLut;
   }
+  
+  // make sure the input and output samples match, or we could cause an access violation
+  icUInt16Number inputSamples = GetNumSrcSamples();
+  icUInt16Number outputSamples = GetNumDstSamples();
+  icUInt16Number xformInputSamples = m_pTag->NumInputChannels();
+  icUInt16Number xformOutputSamples = m_pTag->NumOutputChannels();
+  
+  if (inputSamples != xformInputSamples || outputSamples != xformOutputSamples)
+    return icCmmStatBadXform;
 
   if (!m_pTag->Begin(icElemInterpLinear, GetProfileCC(), GetConnectionConditions(), GetCmmEnvVarLookup())) {
     return icCmmStatInvalidProfile;
