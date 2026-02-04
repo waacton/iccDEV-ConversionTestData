@@ -83,6 +83,7 @@
 #include "IccDefs.h"
 #include "IccApplyBPC.h"
 #include "TiffImg.h"
+#include "IccProfLibVer.h"
 
 //===================================================
 
@@ -109,6 +110,7 @@ void Usage(const char *name)
   printf("\tend: integer, last channel number to process\n");                                   // argv[6]
   printf("\tincrement: integer, increment between channels\n");                                 // argv[7]
   printf("\tprofile: optional ICC profile to embed in the output TIFF\n");                      // argv[8]
+  printf("Built with IccProfLib version " ICCPROFLIBVER "\n");
   printf("\n");
 }
 
@@ -119,7 +121,7 @@ int main(int argc, char* argv[]) {
   
   if (argc < minargs) {
     Usage(argv[0]);
-    return -1;
+    return 0;
   }
 
   bool bCompress = atoi(argv[2]) != 0;
