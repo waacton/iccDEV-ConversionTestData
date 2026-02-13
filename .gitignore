@@ -73,3 +73,7 @@ Makefile
 /vcpkg_installed
 
 # Further additions that need to be moved to a proper category
+
+# Wacton-fork-specific extras
+.idea/
+cmake-build-debug/
