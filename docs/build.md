@@ -19,11 +19,10 @@ iccDEV requires C++17 or higher to compile.
 ```
 export CXX=clang++
 git clone https://github.com/InternationalColorConsortium/iccdev.git iccdev
-cd iccdev/Build
-sudo apt install -y libpng-dev libjpeg-dev libtiff-dev libwxgtk3.2-dev libwxgtk-{media,webview}3.2-dev wx-common wx3.2-headers curl git make cmake clang{,-tools} libxml2{,-dev} nlohmann-json3-dev build-essential
-cmake Cmake
-make -j"$(nproc)"
-
+cd iccdev
+sudo apt install -y libpng-dev libjpeg-dev libtiff-dev libwxgtk3.2-dev libwxgtk-{media,webview}3.2-dev wx-common wx3.2-headers curl git make cmake clang{,-tools} libxml2{,-dev} nlohmann-json3-dev build-essential ninja-build
+cmake --preset linux-clang -S Build/Cmake -B out/linux-clang
+cmake --build out/linux-clang -j"$(nproc)"
 ```
 
 ## macOS
@@ -33,9 +32,8 @@ export CXX=clang++
 brew install libpng nlohmann-json libxml2 wxwidgets libtiff jpeg-turbo
 git clone https://github.com/InternationalColorConsortium/iccdev.git iccdev
 cd iccdev
-cmake -G "Xcode" Build/Cmake
-xcodebuild -project RefIccMAX.xcodeproj
-open RefIccMAX.xcodeproj
+cmake --preset macos-xcode -S Build/Cmake -B out/macos-xcode
+cmake --build out/macos-xcode --config Release -j"$(sysctl -n hw.ncpu)"
 ```
 
 ## Windows MSVC
@@ -43,29 +41,6 @@ open RefIccMAX.xcodeproj
 ```
 git clone https://github.com/InternationalColorConsortium/iccdev.git iccdev
 cd iccdev
-vcpkg integrate install
-vcpkg install
-cmake --preset vs2022-x64 -B . -S Build/Cmake
-cmake --build . -- /m /maxcpucount
+cmake --preset vs2022-x64 -S Build/Cmake -B out/vs2022-x64
+cmake --build out/vs2022-x64 --config Release -- /m /maxcpucount
 ```
-
-### Reporting Build Issues
-
-Before submitting a PR for build failures:
-
-1. Test local environment:
-   - Build in a clean container/VM
-   - Open an Issue first
-   - Utilize Testing Scripts
-     - [Unix](https://github.com/InternationalColorConsortium/iccDEV/blob/research/contrib/HelperScripts/unix-issue-template.sh)
-       ```
-       /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/InternationalColorConsortium/iccDEV/refs/heads/research/contrib/HelperScripts/unix-pr-review.sh)"
-       ```
-     - [Windows](https://raw.githubusercontent.com/InternationalColorConsortium/iccDEV/refs/heads/research/contrib/HelperScripts/windows-pr-review.ps1)
-       ```
-       iex (iwr -Uri "https://raw.githubusercontent.com/InternationalColorConsortium/iccDEV/refs/heads/research/contrib/HelperScripts/windows-issue-template.ps1").Content
-       ```
-
-2. Open or Update an Issue with the script output.
-
-3. [CI](https://github.com/InternationalColorConsortium/iccDEV/actions/workflows/ci-latest-release.yml) provides the latest builds for macOS, Windows & Linux.
