@@ -190,7 +190,7 @@ void Usage()
 
   printf("Usage 1: iccApplyNamedCmm -cfg config_file_path\n");
   printf("  Where config_file_path is a json formatted ICC profile application configuration file\n\n");
-  printf("Usage 2: iccApplyNamedCmm {-debugcalc} data_file_path final_data_encoding{:FmtPrecision{:FmtDigits}} interpolation {{-ENV:Name value} profile_file_path Rendering_intent {-PCC connection_conditions_path}}\n\n");
+  printf("Usage 2: iccApplyNamedCmm (-exportcfg/-exportcfganddata config_file_path} {-debugcalc} data_file_path final_data_encoding{:FmtPrecision{:FmtDigits}} interpolation {{-ENV:Name value} profile_file_path Rendering_intent {-PCC connection_conditions_path}}\n\n");
   
   printf("  For final_data_encoding:\n");
   printf("    0 - icEncodeValue (converts to/from lab encoding when samples=3)\n");
@@ -277,8 +277,21 @@ int main(int argc, const char* argv[])
     }
   }
   else {
+    std::string exportFile;
+    bool bExportData = false;
+
     argv++;
     argc--;
+
+    if (argc > 2 && 
+        (!stricmp(argv[0], "-exportcfg") ||
+         !stricmp(argv[0], "-exportcfganddata"))) {
+      exportFile = argv[1];
+      if (!stricmp(argv[0], "-exportcfganddata"))
+        bExportData = true;
+      argv += 2;
+      argc -= 2;
+    }
 
     if (argc > 1 && !stricmp(argv[0], "-debugcalc")) {
       cfgApply.m_debugCalc = true;
@@ -304,6 +317,37 @@ int main(int argc, const char* argv[])
     if (cfgApply.m_srcType != icCfgLegacy || !cfgData.fromLegacy(cfgApply.m_srcFile.c_str())) {
       printf("Unable to parse legacy data file '%s'\n", cfgApply.m_srcFile.c_str());
       return -1;
+    }
+
+    if (!exportFile.empty()) {
+      FILE* f = fopen(exportFile.c_str(), "wt");
+      if (f) {
+        json cfgJson;
+        json applyJson, profilesJson;
+
+        cfgApply.toJson(applyJson);
+
+        if (bExportData) {
+          json dataJson;
+          cfgData.toJson(dataJson);
+          cfgJson["colorData"] = dataJson;
+
+          applyJson["srcFile"] = nullptr;
+          applyJson["srcType"] = "colorData";
+        }
+
+        cfgJson["dataFiles"] = applyJson;
+
+        cfgProfiles.toJson(profilesJson);
+        cfgJson["profileSequence"] = profilesJson;
+
+        std::string jsonText = cfgJson.dump(1);
+        fwrite(jsonText.c_str(), 1, jsonText.size(), f);
+        fclose(f);
+      }
+      else {
+        printf("Unable to export config file '%s'\n", exportFile.c_str());
+      }
     }
   }
   LogDebuggerPtr pDebugger;

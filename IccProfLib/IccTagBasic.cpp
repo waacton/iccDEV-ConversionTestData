@@ -5984,7 +5984,7 @@ icValidateStatus CIccTagNum<T, Tsig>::Validate(std::string sigPath, std::string 
 {
   icValidateStatus rv = icValidateOK;
   //Check # of channels 
-  if (icGetFirstSigPathSig(sigPath) == icSigMaterialDefaultValuesTag && 
+  if (icGetFirstSigPathSig(sigPath) == icSigMultiplexDefaultValuesTag && 
       pProfile &&
       m_nSize != icGetMaterialColorSpaceSamples(pProfile->m_Header.mcs)) {
     CIccInfo Info;
@@ -6675,7 +6675,7 @@ icValidateStatus CIccTagFloatNum<T, Tsig>::Validate(std::string sigPath, std::st
 {
   icValidateStatus rv = icValidateOK;
   //Check # of channels 
-  if (icGetFirstSigPathSig(sigPath) == icSigMaterialDefaultValuesTag && 
+  if (icGetFirstSigPathSig(sigPath) == icSigMultiplexDefaultValuesTag && 
     pProfile &&
     m_nSize != icGetMaterialColorSpaceSamples(pProfile->m_Header.mcs)) {
       CIccInfo Info;
@@ -8713,27 +8713,11 @@ icValidateStatus CIccTagColorantOrder::Validate(std::string sigPath, std::string
     return rv;
   }
 
-  if (sigPath==icGetSigPath(icSigColorantTableTag)) {
-    if (m_nCount != icGetSpaceSamples(pProfile->m_Header.colorSpace)) {
-      sReport += icMsgValidateNonCompliant;
-      sReport += sSigPathName;
-      sReport += " - Incorrect number of colorants.\n";
-      rv = icMaxStatus(rv, icValidateNonCompliant);
-    }
-  }
-  else if (sigPath==icGetSigPath(icSigColorantTableOutTag)) {
-    if (m_nCount != icGetSpaceSamples(pProfile->m_Header.pcs)) {
-      sReport += icMsgValidateNonCompliant;
-      sReport += sSigPathName;
-      sReport += " - Incorrect number of colorants.\n";
-      rv = icMaxStatus(rv, icValidateNonCompliant);
-    }
-  }
-  else {
-    sReport += icMsgValidateWarning;
+  if (m_nCount != icGetSpaceSamples(pProfile->m_Header.colorSpace)) {
+    sReport += icMsgValidateNonCompliant;
     sReport += sSigPathName;
-    sReport += " - Unknown number of required colorants.\n";
-    rv = icMaxStatus(rv, icValidateWarning);
+    sReport += " - Incorrect number of colorants.\n";
+    rv = icMaxStatus(rv, icValidateNonCompliant);
   }
 
   return rv;
