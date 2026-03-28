@@ -120,11 +120,11 @@ project(RefIccMAX LANGUAGES C CXX)
 set(PROJECT_UP_NAME "REFICCMAX")
 set(PROJECT_DOWN_NAME "reficcmax")
 
-# Version components (4-part version: 2.3.1.5)
+# Version components (4-part version: 2.3.1.6)
 set(${PROJECT_UP_NAME}_MAJOR_VERSION 2)
 set(${PROJECT_UP_NAME}_MINOR_VERSION 3)
 set(${PROJECT_UP_NAME}_MICRO_VERSION 1)
-set(${PROJECT_UP_NAME}_PATCH_VERSION 5)
+set(${PROJECT_UP_NAME}_PATCH_VERSION 6)
 
 # Composite versions
 set(${PROJECT_UP_NAME}_VERSION
@@ -165,6 +165,15 @@ endif()
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build." FORCE)
 endif()
+
+# ----------------------------------------------------------------------
+# Debug Library Postfix (disambiguate Debug vs Release install)
+# ----------------------------------------------------------------------
+# Appends "d" to Debug library names (e.g., libIccProfLib2d.so) so that
+# Debug and Release libraries can coexist in the same install prefix.
+# This is especially important for multi-config generators (Visual Studio, Xcode).
+
+set(CMAKE_DEBUG_POSTFIX "d")
 
 # ----------------------------------------------------------------------
 # Verbose Configuration Toggle
@@ -516,6 +525,7 @@ message(STATUS "### Build Options ###")
 # Build and feature flags
 option(ENABLE_TESTS               "Build tests (requires static libs)"                  ON)
 option(ENABLE_TOOLS               "Build tools (command-line + GUI)"                    ON)
+option(ENABLE_WXWIDGETS           "Build wxProfileDump GUI tool (requires wxWidgets)"   ON)
 option(ENABLE_SHARED_LIBS         "Build dynamic link libraries"                        ON)
 option(ENABLE_STATIC_LIBS         "Build static libraries"                              ON)
 option(ENABLE_ICCXML              "Build IccXML library support"                        ON)
@@ -562,6 +572,7 @@ endif()
 # ----------------------------------------------------------------------
 message(STATUS "ENABLE_TESTS               = ${ENABLE_TESTS}")
 message(STATUS "ENABLE_TOOLS               = ${ENABLE_TOOLS}")
+message(STATUS "ENABLE_WXWIDGETS           = ${ENABLE_WXWIDGETS}")
 message(STATUS "ENABLE_SHARED_LIBS         = ${ENABLE_SHARED_LIBS}")
 message(STATUS "ENABLE_STATIC_LIBS         = ${ENABLE_STATIC_LIBS}")
 message(STATUS "ENABLE_ICCXML              = ${ENABLE_ICCXML}")
@@ -968,6 +979,22 @@ elseif(UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
 
   message(STATUS "Linux build: Warning flags and security hardening applied.")
 
+elseif(EMSCRIPTEN)
+  message(STATUS "Detected platform: Emscripten (WebAssembly)")
+
+  # Emscripten uses its own toolchain -- no ELF hardening, no stack-protector.
+  # Warning flags only; linker/runtime flags are set by emcmake/emcc.
+  add_compile_options(
+    -Wall
+    -Wextra
+    -Wformat
+    -Wformat-security
+    -Wimplicit-fallthrough
+    -Wsign-compare
+  )
+
+  message(STATUS "Emscripten build: Warning flags applied (no ELF hardening).")
+
 elseif(WIN32)
   message(STATUS "Detected platform: Windows")
 
@@ -1187,15 +1214,19 @@ ADD_SUBDIRECTORY(Tools/IccPngDump)
     message(FATAL_ERROR "TIFF library not found. Please install libtiff-dev.")
   endif()
 
-  # wxWidgets GUI tool (optional)
-  find_package(wxWidgets QUIET COMPONENTS core base)
-  if(wxWidgets_FOUND)
-    include(${wxWidgets_USE_FILE})
-    message(STATUS "wxWidgets found: ${wxWidgets_LIBRARIES}")
-    message(STATUS "Adding Subdirectory wxProfileDump.")
-    ADD_SUBDIRECTORY(Tools/wxProfileDump)
+  # wxWidgets GUI tool (optional, controlled by ENABLE_WXWIDGETS)
+  if(ENABLE_WXWIDGETS)
+    find_package(wxWidgets QUIET COMPONENTS core base)
+    if(wxWidgets_FOUND)
+      include(${wxWidgets_USE_FILE})
+      message(STATUS "wxWidgets found: ${wxWidgets_LIBRARIES}")
+      message(STATUS "Adding Subdirectory wxProfileDump.")
+      ADD_SUBDIRECTORY(Tools/wxProfileDump)
+    else()
+      message(STATUS "wxWidgets not found - skipping wxProfileDump.")
+    endif()
   else()
-    message(STATUS "wxWidgets not found - skipping wxProfileDump.")
+    message(STATUS "wxWidgets disabled by ENABLE_WXWIDGETS=OFF - skipping wxProfileDump.")
   endif()
 
 ENDIF(ENABLE_TOOLS)
