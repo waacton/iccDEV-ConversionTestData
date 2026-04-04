@@ -4605,9 +4605,9 @@ bool CIccTagSparseMatrixArray::Read(icUInt32Number size, CIccIO *pIO)
   // But this math must match GetBytesPerMatrix()
   icUInt64Number nBytesPerMatrix = nChannels * sizeof(icFloatNumber);
 
-  icUInt64Number nNeededSize = nBytesPerMatrix * nNumMatrices;
-  if (nNeededSize > (icUInt64Number)nSizeLeft)
-    return false;
+  // NOTE: nBytesPerMatrix * nNumMatrices is the BUFFER allocation size, NOT the file data size.
+  // Sparse matrices store only non-zero entries, so file data is much smaller than the buffer.
+  // Per-read bounds checks in the loop below validate actual file data consumption.
 
   // this sets the sizes, and allocates a huge chunk of memory for matrix storage in m_RawData
   Reset(nNumMatrices, nChannels);
@@ -8713,11 +8713,27 @@ icValidateStatus CIccTagColorantOrder::Validate(std::string sigPath, std::string
     return rv;
   }
 
-  if (m_nCount != icGetSpaceSamples(pProfile->m_Header.colorSpace)) {
-    sReport += icMsgValidateNonCompliant;
+  if (sigPath==icGetSigPath(icSigColorantTableTag)) {
+    if (m_nCount != icGetSpaceSamples(pProfile->m_Header.colorSpace)) {
+      sReport += icMsgValidateNonCompliant;
+      sReport += sSigPathName;
+      sReport += " - Incorrect number of colorants.\n";
+      rv = icMaxStatus(rv, icValidateNonCompliant);
+    }
+  }
+  else if (sigPath==icGetSigPath(icSigColorantTableOutTag)) {
+    if (m_nCount != icGetSpaceSamples(pProfile->m_Header.pcs)) {
+      sReport += icMsgValidateNonCompliant;
+      sReport += sSigPathName;
+      sReport += " - Incorrect number of colorants.\n";
+      rv = icMaxStatus(rv, icValidateNonCompliant);
+    }
+  }
+  else {
+    sReport += icMsgValidateWarning;
     sReport += sSigPathName;
-    sReport += " - Incorrect number of colorants.\n";
-    rv = icMaxStatus(rv, icValidateNonCompliant);
+    sReport += " - Unknown number of required colorants.\n";
+    rv = icMaxStatus(rv, icValidateWarning);
   }
 
   return rv;
