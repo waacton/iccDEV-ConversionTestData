@@ -44,6 +44,7 @@ on:
       - '.github/ci/test-data/**'
       - 'IccProfLib/**'
       - 'IccXML/**'
+      - 'IccJSON/**'
       - 'Tools/**'
       - 'Build/Cmake/**'
   workflow_dispatch:
@@ -190,6 +191,7 @@ jobs:
 
           ls -lh IccProfLib/libIccProfLib2.so* || echo "WARN: shared lib missing"
           ls -lh IccXML/libIccXML2.so* || echo "WARN: XML shared lib missing"
+          ls -lh IccJSON/libIccJSON2.so* || echo "WARN: JSON shared lib missing"
 
           {
             echo "### iccDEV Build"
@@ -209,7 +211,7 @@ jobs:
       - name: Generate test profiles (CreateAllProfiles.sh)
         env:
           BASH_ENV: /dev/null
-          LD_LIBRARY_PATH: "${{ github.workspace }}/build/IccProfLib:${{ github.workspace }}/build/IccXML"
+          LD_LIBRARY_PATH: "${{ github.workspace }}/build/IccProfLib:${{ github.workspace }}/build/IccXML:${{ github.workspace }}/build/IccJSON"
           ASAN_OPTIONS: "detect_leaks=0,halt_on_error=0"
           UBSAN_OPTIONS: "halt_on_error=0,print_stacktrace=1"
           WORKSPACE_DIR: ${{ github.workspace }}
@@ -264,7 +266,7 @@ jobs:
       - name: Run iccDEV tool coverage baseline (103 tests)
         env:
           BASH_ENV: /dev/null
-          LD_LIBRARY_PATH: "${{ github.workspace }}/build/IccProfLib:${{ github.workspace }}/build/IccXML"
+          LD_LIBRARY_PATH: "${{ github.workspace }}/build/IccProfLib:${{ github.workspace }}/build/IccXML:${{ github.workspace }}/build/IccJSON"
           ASAN_OPTIONS: "halt_on_error=0,detect_leaks=0"
           UBSAN_OPTIONS: "halt_on_error=0,print_stacktrace=1"
           LLVM_PROFILE_FILE: "/dev/null"
@@ -309,7 +311,7 @@ jobs:
       - name: Run JSON -cfg configuration tests (31 tests)
         env:
           BASH_ENV: /dev/null
-          LD_LIBRARY_PATH: "${{ github.workspace }}/build/IccProfLib:${{ github.workspace }}/build/IccXML"
+          LD_LIBRARY_PATH: "${{ github.workspace }}/build/IccProfLib:${{ github.workspace }}/build/IccXML:${{ github.workspace }}/build/IccJSON"
           ASAN_OPTIONS: "halt_on_error=0,detect_leaks=0"
           UBSAN_OPTIONS: "halt_on_error=0,print_stacktrace=1"
           LLVM_PROFILE_FILE: "/dev/null"
@@ -365,7 +367,7 @@ jobs:
         if: success() || failure()
         env:
           BASH_ENV: /dev/null
-          LD_LIBRARY_PATH: "${{ github.workspace }}/build/IccProfLib:${{ github.workspace }}/build/IccXML"
+          LD_LIBRARY_PATH: "${{ github.workspace }}/build/IccProfLib:${{ github.workspace }}/build/IccXML:${{ github.workspace }}/build/IccJSON"
           ASAN_OPTIONS: "halt_on_error=0,detect_leaks=0"
           UBSAN_OPTIONS: "halt_on_error=0,print_stacktrace=1"
           LLVM_PROFILE_FILE: "/dev/null"
@@ -413,7 +415,7 @@ jobs:
         env:
           BASH_ENV: /dev/null
           WORKSPACE_DIR: ${{ github.workspace }}
-          LD_LIBRARY_PATH: "${{ github.workspace }}/build/IccProfLib:${{ github.workspace }}/build/IccXML"
+          LD_LIBRARY_PATH: "${{ github.workspace }}/build/IccProfLib:${{ github.workspace }}/build/IccXML:${{ github.workspace }}/build/IccJSON"
           ASAN_OPTIONS: "halt_on_error=0,detect_leaks=0,symbolize=1,print_scariness=1"
           UBSAN_OPTIONS: "halt_on_error=0,print_stacktrace=1"
           LLVM_PROFILE_FILE: "/dev/null"
@@ -572,6 +574,255 @@ jobs:
             echo "  [SKIP] .github/ci/regression/ not found"
           fi
 
+          # --- R7: XML_PARSE_NONET defense-in-depth (#735) ---
+          echo "--- R7: XML_PARSE_NONET defense-in-depth (#735) ---"
+
+          # R7a: Source-level check -- XML_PARSE_NONET must be present
+          nonet_ok=true
+          for src in IccXML/IccLibXML/IccProfileXml.cpp IccXML/IccLibXML/IccMpeXml.cpp; do
+            src_path="${WORKSPACE_DIR}/${src}"
+            if [ ! -f "$src_path" ]; then
+              echo "  [SKIP] $src not found"; continue
+            fi
+            if grep -q 'XML_PARSE_NONET' "$src_path"; then
+              echo "  [OK]   $src contains XML_PARSE_NONET"
+              passed=$((passed + 1))
+            else
+              echo "  [FAIL] $src missing XML_PARSE_NONET flag"
+              failed=$((failed + 1)); nonet_ok=false
+            fi
+          done
+
+          # R7b: Runtime check -- iccFromXml must not attempt network fetch
+          # Uses external DTD at TEST-NET-1 (RFC 5737, 192.0.2.0/24).
+          # With NONET: completes in <2s.  Without: blocks 30-120s.
+          XXE_XML="${WORKSPACE_DIR}/.github/ci/test-data/xxe-nonet-regression-735.xml"
+          if [ -f "$XXE_XML" ] && [ -x "$FROMXML" ]; then
+            START_NS=$(date +%s%N)
+            timeout 5 "$FROMXML" "$XXE_XML" "$OUTDIR/xxe-nonet.icc" \
+              > "$OUTDIR/r7-xxe-nonet.log" 2>&1 || true
+            END_NS=$(date +%s%N)
+            ELAPSED_MS=$(( (END_NS - START_NS) / 1000000 ))
+            if [ "$ELAPSED_MS" -lt 4000 ]; then
+              echo "  [OK]   iccFromXml+NONET completed in ${ELAPSED_MS}ms (no network fetch)"
+              passed=$((passed + 1))
+            else
+              echo "  [FAIL] iccFromXml took ${ELAPSED_MS}ms -- XML_PARSE_NONET may be missing"
+              failed=$((failed + 1))
+            fi
+          else
+            echo "  [SKIP] xxe-nonet-regression-735.xml or iccFromXml not found"
+          fi
+
+          # --- R8: Gamma u8Fixed8 precision regression (PR #808) ---
+          echo "--- R8: Gamma u8Fixed8 precision (PR #808) ---"
+          GAMMA_DIR="${WORKSPACE_DIR}/.github/ci/regression"
+          r8_pass=0 r8_fail=0
+          declare -A GAMMA_TESTS=(
+            ["gamma-2.20703125.icc"]="2.2070312500"
+            ["gamma-1.796875.icc"]="1.7968750000"
+            ["gamma-2.3984375.icc"]="2.3984375000"
+            ["gamma-1.0000000000.icc"]="1.0000000000"
+          )
+          for poc in "${!GAMMA_TESTS[@]}"; do
+            expected="${GAMMA_TESTS[$poc]}"
+            poc_path="${GAMMA_DIR}/${poc}"
+            if [ -f "$poc_path" ]; then
+              timeout 30 "$DUMP" "$poc_path" ALL > "$OUTDIR/r8-${poc}.log" 2>&1 || true
+              if grep -q "ERROR: AddressSanitizer" "$OUTDIR/r8-${poc}.log" 2>/dev/null; then
+                echo "  [ASAN]  gamma ${poc}"; r8_fail=$((r8_fail + 1))
+              elif grep -q "Y = X ^ ${expected}" "$OUTDIR/r8-${poc}.log" 2>/dev/null; then
+                echo "  [OK]    ${poc}: Y = X ^ ${expected}"; r8_pass=$((r8_pass + 1))
+              else
+                actual=$(grep -oP 'Y = X \^ [\d.]+' "$OUTDIR/r8-${poc}.log" | head -1)
+                echo "  [FAIL]  ${poc}: expected ${expected}, got ${actual:-<none>}"
+                r8_fail=$((r8_fail + 1))
+              fi
+            else
+              echo "  [SKIP]  ${poc} not found"
+            fi
+          done
+          echo "  Gamma precision: $r8_pass passed, $r8_fail failed"
+          passed=$((passed + r8_pass))
+          failed=$((failed + r8_fail))
+
+          # --- R9: JSON gamma serialization regression (PR #808) ---
+          echo "--- R9: JSON gamma serialization (PR #808) ---"
+          TOJSON="${WORKSPACE_DIR}/build/Tools/IccToJson/iccToJson"
+          FROMJSON="${WORKSPACE_DIR}/build/Tools/IccFromJson/iccFromJson"
+          r9_pass=0 r9_fail=0
+
+          # Write JSON gamma checker to temp script (avoids YAML block-scalar breakage)
+          {
+            echo 'import json, sys'
+            echo 'json_path, tag_name, field_name, expected_str = sys.argv[1:5]'
+            echo 'expected = float(expected_str)'
+            echo 'd = json.load(open(json_path))'
+            echo 'for t in d["IccProfile"]["Tags"]:'
+            echo '    if tag_name in t:'
+            echo '        data = t[tag_name]["data"]'
+            echo '        actual = data["gamma"] if field_name == "gamma" else data["params"][0]'
+            echo '        if abs(actual - expected) < 0.01:'
+            echo '            sys.exit(0)'
+            echo '        else:'
+            echo '            print(f"{field_name}={actual}, expected ~{expected}", file=sys.stderr)'
+            echo '            sys.exit(1)'
+            echo 'print(f"tag {tag_name} not found", file=sys.stderr)'
+            echo 'sys.exit(2)'
+          } > "$OUTDIR/r9-check-gamma.py"
+
+          if [ -x "$TOJSON" ]; then
+            # Test 1: curveType gamma (u8Fixed8 raw 565 = 2.20703125)
+            CURVE_ICC="${WORKSPACE_DIR}/.github/ci/regression/gamma-2.20703125.icc"
+            if [ -f "$CURVE_ICC" ]; then
+              timeout 30 "$TOJSON" "$CURVE_ICC" "$OUTDIR/r9-curve.json" > "$OUTDIR/r9-curve.log" 2>&1 || true
+              if grep -q "ERROR: AddressSanitizer" "$OUTDIR/r9-curve.log" 2>/dev/null; then
+                echo "  [ASAN]  json curveType gamma"; r9_fail=$((r9_fail + 1))
+              elif python3 "$OUTDIR/r9-check-gamma.py" "$OUTDIR/r9-curve.json" "redTRCTag" "gamma" "2.20703125" 2>"$OUTDIR/r9-curve-err.log"; then
+                echo "  [OK]    curveType JSON gamma ~2.207"; r9_pass=$((r9_pass + 1))
+              else
+                echo "  [FAIL]  curveType JSON gamma: $(cat "$OUTDIR/r9-curve-err.log")"
+                r9_fail=$((r9_fail + 1))
+              fi
+            else
+              echo "  [SKIP]  gamma-2.20703125.icc not found"
+            fi
+
+            # Test 2: parametricCurveType gamma (s15Fixed16 = 2.399993896484375)
+            PARA_ICC="${WORKSPACE_DIR}/.github/ci/regression/para-gamma-2.4.icc"
+            if [ -f "$PARA_ICC" ]; then
+              timeout 30 "$TOJSON" "$PARA_ICC" "$OUTDIR/r9-para.json" > "$OUTDIR/r9-para.log" 2>&1 || true
+              if grep -q "ERROR: AddressSanitizer" "$OUTDIR/r9-para.log" 2>/dev/null; then
+                echo "  [ASAN]  json parametric gamma"; r9_fail=$((r9_fail + 1))
+              elif python3 "$OUTDIR/r9-check-gamma.py" "$OUTDIR/r9-para.json" "redTRCTag" "params" "2.4" 2>"$OUTDIR/r9-para-err.log"; then
+                echo "  [OK]    parametric JSON gamma ~2.4"; r9_pass=$((r9_pass + 1))
+              else
+                echo "  [FAIL]  parametric JSON gamma: $(cat "$OUTDIR/r9-para-err.log")"
+                r9_fail=$((r9_fail + 1))
+              fi
+            else
+              echo "  [SKIP]  para-gamma-2.4.icc not found"
+            fi
+
+            # Test 3: JSON round-trip preserves curveType gamma
+            if [ -f "$OUTDIR/r9-curve.json" ] && [ -x "$FROMJSON" ]; then
+              timeout 30 "$FROMJSON" "$OUTDIR/r9-curve.json" "$OUTDIR/r9-curve-rt.icc" > "$OUTDIR/r9-rt.log" 2>&1 || true
+              if grep -q "ERROR: AddressSanitizer" "$OUTDIR/r9-rt.log" 2>/dev/null; then
+                echo "  [ASAN]  json roundtrip"; r9_fail=$((r9_fail + 1))
+              elif [ -f "$OUTDIR/r9-curve-rt.icc" ]; then
+                timeout 30 "$DUMP" "$OUTDIR/r9-curve-rt.icc" ALL > "$OUTDIR/r9-rt-dump.log" 2>&1 || true
+                if grep -q "Y = X ^ 2.2070312500" "$OUTDIR/r9-rt-dump.log" 2>/dev/null; then
+                  echo "  [OK]    JSON round-trip preserves gamma 2.2070312500"; r9_pass=$((r9_pass + 1))
+                else
+                  actual=$(grep -oP 'Y = X \^ [\d.]+' "$OUTDIR/r9-rt-dump.log" | head -1)
+                  echo "  [FAIL]  JSON round-trip: expected 2.2070312500, got ${actual:-<none>}"
+                  r9_fail=$((r9_fail + 1))
+                fi
+              else
+                echo "  [FAIL]  JSON round-trip: iccFromJson produced no output"
+                r9_fail=$((r9_fail + 1))
+              fi
+            fi
+          else
+            echo "  [SKIP]  iccToJson not available"
+          fi
+
+          echo "  JSON gamma: $r9_pass passed, $r9_fail failed"
+          passed=$((passed + r9_pass))
+          failed=$((failed + r9_fail))
+
+          # --- R10: JSON size_t-to-u16 truncation overflow regression (PR #808) ---
+          # Validates icJsonSafeU16() rejects chromaticity channels > 65535.
+          # Bug: (icUInt16Number)size_t silently truncated 65537 -> 1, causing massive heap-buffer-overflow.
+          # Fix: icJsonSafeU16() returns 0 for out-of-range; ParseJson rejects and skips allocation.
+          echo "--- R10: JSON size-overflow rejection (PR #808) ---"
+          FROMJSON="${WORKSPACE_DIR}/build/Tools/IccFromJson/iccFromJson"
+          r10_pass=0 r10_fail=0
+
+          if [ -x "$FROMJSON" ]; then
+            # Generate PoC JSON with 65537 chromaticity channels (overflows icUInt16Number)
+            {
+              echo 'import json'
+              echo 'profile = {'
+              echo '    "IccProfile": {'
+              echo '        "Header": {'
+              echo '            "preferredCMMType": "none",'
+              echo '            "profileVersion": "4.4.0.0",'
+              echo '            "deviceClass": "mntr",'
+              echo '            "colorSpace": "RGB",'
+              echo '            "pcs": "XYZ",'
+              echo '            "platform": "APPL",'
+              echo '            "flags": "00000000",'
+              echo '            "manufacturer": "none",'
+              echo '            "model": "none",'
+              echo '            "attributes": "0000000000000000",'
+              echo '            "renderingIntent": "Perceptual",'
+              echo '            "illuminant": {"X": 0.9642, "Y": 1.0, "Z": 0.8249},'
+              echo '            "creator": "test",'
+              echo '            "profileID": "00000000000000000000000000000000",'
+              echo '            "spectralPCS": "none",'
+              echo '            "spectralRange": None,'
+              echo '            "biSpectralRange": None,'
+              echo '            "MCS": "none",'
+              echo '            "SubClass": "none",'
+              echo '            "SubClassVersion": "0.0.0.0"'
+              echo '        },'
+              echo '        "Tags": ['
+              echo '            {'
+              echo '                "chromaticityTag": {'
+              echo '                    "type": "chromaticityType",'
+              echo '                    "data": {'
+              echo '                        "colorantType": "Unknown",'
+              echo '                        "channels": [[0.1, 0.2]] * 65537'
+              echo '                    }'
+              echo '                }'
+              echo '            }'
+              echo '        ]'
+              echo '    }'
+              echo '}'
+              echo 'json.dump(profile, open("'"$OUTDIR"'/r10-poc-overflow.json", "w"))'
+            } > "$OUTDIR/r10-gen-poc.py"
+            python3 "$OUTDIR/r10-gen-poc.py"
+
+            if [ -f "$OUTDIR/r10-poc-overflow.json" ]; then
+              # Test 1: iccFromJson must NOT crash on oversized chromaticity
+              timeout 30 "$FROMJSON" "$OUTDIR/r10-poc-overflow.json" "$OUTDIR/r10-out.icc" > "$OUTDIR/r10.log" 2>&1
+              r10_ec=$?
+              if grep -q "ERROR: AddressSanitizer" "$OUTDIR/r10.log" 2>/dev/null; then
+                echo "  [ASAN]  json size-overflow PoC"; r10_fail=$((r10_fail + 1))
+              elif [ "$r10_ec" -ge 128 ]; then
+                echo "  [FAIL]  iccFromJson crashed (signal $((r10_ec - 128))) on overflow PoC"
+                r10_fail=$((r10_fail + 1))
+              else
+                echo "  [OK]    iccFromJson handled 65537-channel PoC without crash (exit $r10_ec)"
+                r10_pass=$((r10_pass + 1))
+              fi
+
+              # Test 2: output profile must be small (channels were rejected, not allocated)
+              if [ -f "$OUTDIR/r10-out.icc" ]; then
+                r10_size=$(stat -c%s "$OUTDIR/r10-out.icc" 2>/dev/null || echo 0)
+                if [ "$r10_size" -lt 1024 ]; then
+                  echo "  [OK]    output profile is $r10_size bytes (overflow channels rejected)"
+                  r10_pass=$((r10_pass + 1))
+                else
+                  echo "  [FAIL]  output profile is $r10_size bytes (expected <1024 -- channels not rejected?)"
+                  r10_fail=$((r10_fail + 1))
+                fi
+              else
+                echo "  [OK]    no output profile (overflow rejected entirely)"
+                r10_pass=$((r10_pass + 1))
+              fi
+            else
+              echo "  [SKIP]  PoC generation failed"
+            fi
+          else
+            echo "  [SKIP]  iccFromJson not available"
+          fi
+
+          echo "  JSON size-overflow: $r10_pass passed, $r10_fail failed"
+          passed=$((passed + r10_pass))
+          failed=$((failed + r10_fail))
+
           echo ""
           echo "Regression checks: $passed passed, $failed failed"
           if [ "$failed" -gt 0 ]; then exit 1; fi
@@ -583,7 +834,7 @@ jobs:
         if: always()
         env:
           BASH_ENV: /dev/null
-          LD_LIBRARY_PATH: "${{ github.workspace }}/build/IccProfLib:${{ github.workspace }}/build/IccXML"
+          LD_LIBRARY_PATH: "${{ github.workspace }}/build/IccProfLib:${{ github.workspace }}/build/IccXML:${{ github.workspace }}/build/IccJSON"
           ASAN_OPTIONS: "halt_on_error=0,detect_leaks=0"
           UBSAN_OPTIONS: "halt_on_error=0,print_stacktrace=1"
           LLVM_PROFILE_FILE: "/dev/null"
@@ -658,7 +909,7 @@ jobs:
         if: always()
         env:
           BASH_ENV: /dev/null
-          LD_LIBRARY_PATH: "${{ github.workspace }}/build/IccProfLib:${{ github.workspace }}/build/IccXML"
+          LD_LIBRARY_PATH: "${{ github.workspace }}/build/IccProfLib:${{ github.workspace }}/build/IccXML:${{ github.workspace }}/build/IccJSON"
           ASAN_OPTIONS: "halt_on_error=0,detect_leaks=0"
           UBSAN_OPTIONS: "halt_on_error=0,print_stacktrace=1"
           LLVM_PROFILE_FILE: "/dev/null"
@@ -861,7 +1112,7 @@ jobs:
             echo "  -DENABLE_TOOLS=ON && make -j\$(nproc)"
             echo "cd ../Testing && ./CreateAllProfiles.sh"
             echo "ICCDEV_TOOLS_DIR=build/Tools ICCDEV_TESTING_DIR=Testing \\"
-            echo "  LD_LIBRARY_PATH=build/IccProfLib:build/IccXML \\"
+            echo "  LD_LIBRARY_PATH=build/IccProfLib:build/IccXML:build/IccJSON \\"
             echo "  .github/scripts/iccdev-tool-coverage-baseline.sh --asan"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
