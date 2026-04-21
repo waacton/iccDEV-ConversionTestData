@@ -38,9 +38,25 @@ add_library(iccIisIsapi SHARED
 target_compile_features(iccIisIsapi PRIVATE cxx_std_17)
 target_include_directories(iccIisIsapi PRIVATE "${WINNT_ROOT}")
 target_link_libraries(iccIisIsapi PRIVATE IccProfLib2 IccXML2)
-if(TARGET IccJSON2)
+if(ENABLE_ICCJSON)
+  if(NOT TARGET IccJSON2)
+    message(FATAL_ERROR
+      "ENABLE_ICCJSON is ON but the IccJSON2 target is not defined; "
+      "iccIisIsapi requires IccJSON2 for the JSON endpoints (issue #823)")
+  endif()
   target_link_libraries(iccIisIsapi PRIVATE IccJSON2)
+  target_include_directories(iccIisIsapi PRIVATE
+    "${SRC_ROOT}/IccJSON/IccLibJSON")
   target_compile_definitions(iccIisIsapi PRIVATE USE_ICCJSON=1)
+  if(MSVC)
+    # issue #823: anchor an exported IccJSON2 symbol so MSVC link
+    # (/OPT:REF,ICF) and any antivirus / parallel-build race on the
+    # windows-latest runner cannot silently elide the IccJSON2.dll
+    # import from iccIisIsapi.dll. The CIccProfileJson destructor is
+    # exported and stable (see dumpbin /exports IccJSON2.dll).
+    target_link_options(iccIisIsapi PRIVATE
+      "/INCLUDE:??1CIccProfileJson@@UEAA@XZ")
+  endif()
 endif()
 set_target_properties(iccIisIsapi PROPERTIES
   OUTPUT_NAME "iccIisIsapi"

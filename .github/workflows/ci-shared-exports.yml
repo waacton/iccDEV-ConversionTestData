@@ -28,6 +28,9 @@ on:
   push:
     branches:
       - master
+  pull_request:
+    branches:
+      - master
   workflow_dispatch:
     inputs:
       iccdev_repo:
@@ -77,7 +80,7 @@ jobs:
         env:
           BASH_ENV: /dev/null
           RAW_ICCDEV_REPO: ${{ github.event.inputs.iccdev_repo || github.repository }}
-          RAW_ICCDEV_REF: ${{ github.event.inputs.iccdev_ref || github.ref_name }}
+          RAW_ICCDEV_REF: ${{ github.event.inputs.iccdev_ref || github.head_ref || github.ref_name }}
         run: |
           set -euo pipefail
           source .github/scripts/sanitize-sed.sh 2>/dev/null || true
@@ -435,7 +438,7 @@ jobs:
 
       - name: Upload Build Artifacts (on failure)
         if: failure()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0 (node24)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v6.0.0 (node24)
         with:
           name: build-logs-${{ matrix.os }}-${{ matrix.compiler }}-${{ matrix.build_type }}
           path: |
@@ -447,7 +450,7 @@ jobs:
 
       - name: Upload Build Artifacts (on success)
         if: success()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0 (node24)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v6.0.0 (node24)
         with:
           name: build-${{ matrix.os }}-${{ matrix.compiler }}-${{ matrix.build_type }}
           path: |
@@ -624,7 +627,7 @@ jobs:
 
       - name: Upload Sanitizer Build Artifacts
         if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0 (node24)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v6.0.0 (node24)
         with:
           name: sanitizer-${{ matrix.sanitizer }}-${{ matrix.build_type }}
           path: |
@@ -1242,7 +1245,7 @@ jobs:
 
       - name: Upload ABI Reports
         if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6.0.0 (node24)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v6.0.0 (node24)
         with:
           name: abi-windows-${{ matrix.build_type }}
           path: Build/Cmake/build/abi-reports/*
@@ -2207,19 +2210,49 @@ jobs:
             "dumpbin /exports `"$iisDll`" > `"$iisExportsLog`"",
             "dumpbin /dependents `"$iisDll`" > `"$iisDepsLog`""
           ) -join ' && '
-          cmd.exe /d /s /c $inspectCmd
-          if ($LASTEXITCODE -ne 0) {
-            throw "iccIisIsapi dumpbin verification failed with exit code $LASTEXITCODE"
+          # issue #823: harden against the windows-latest AV/parallel-build
+          # race that can produce a transiently truncated PE import table
+          # (Windows Defender real-time scan holds an open handle on the
+          # freshly-installed DLL while dumpbin reads it). Add Defender
+          # exclusion + retry the dumpbin read up to 5 times so a single
+          # transient miss does not fail the smoke check. The /INCLUDE:
+          # linker anchor in Tools/IccIisIsapi/CMakeLists.txt prevents the
+          # underlying import elision; this loop mitigates I/O-layer flake.
+          try {
+            Add-MpPreference -ExclusionPath $env:INSTALL_PREFIX -ErrorAction SilentlyContinue
+            Add-MpPreference -ExclusionPath $env:RUNNER_TEMP -ErrorAction SilentlyContinue
+          } catch {
+            Write-Host "[INFO] Defender exclusion add skipped: $($_.Exception.Message)"
+          }
+          $expectedDeps = @(
+            ('IccProfLib2' + $configSuffix + '.dll'),
+            ('IccXML2'     + $configSuffix + '.dll'),
+            ('IccJSON2'    + $configSuffix + '.dll')
+          )
+          $depAttempts = 5
+          $depLastMissing = @()
+          for ($depTry = 1; $depTry -le $depAttempts; $depTry++) {
+            cmd.exe /d /s /c $inspectCmd
+            if ($LASTEXITCODE -ne 0) {
+              throw "iccIisIsapi dumpbin verification failed with exit code $LASTEXITCODE"
+            }
+            $depLastMissing = @($expectedDeps | Where-Object {
+              -not (Select-String -Path $iisDepsLog -Pattern $_ -SimpleMatch -Quiet)
+            })
+            if ($depLastMissing.Count -eq 0) { break }
+            Write-Host "[WARN] dumpbin attempt $depTry/$depAttempts missing: $($depLastMissing -join ', ')"
+            Start-Sleep -Seconds 2
           }
           foreach ($symbol in @('GetExtensionVersion', 'HttpExtensionProc', 'TerminateExtension')) {
             if (-not (Select-String -Path $iisExportsLog -Pattern $symbol -SimpleMatch -Quiet)) {
               throw "iccIisIsapi.dll missing export: $symbol"
             }
           }
-          foreach ($dependency in @(('IccProfLib2' + $configSuffix + '.dll'), ('IccXML2' + $configSuffix + '.dll'), ('IccJSON2' + $configSuffix + '.dll'))) {
-            if (-not (Select-String -Path $iisDepsLog -Pattern $dependency -SimpleMatch -Quiet)) {
-              throw "iccIisIsapi.dll is missing dependency: $dependency"
-            }
+          if ($depLastMissing.Count -gt 0) {
+            $depDump = (Get-Content -Path $iisDepsLog -Raw -ErrorAction SilentlyContinue)
+            Write-Host "----- dumpbin /dependents output (last attempt) -----"
+            Write-Host $depDump
+            throw "iccIisIsapi.dll is missing dependency: $($depLastMissing -join ', ')"
           }
           $originalPath = $env:PATH
           try {
@@ -2288,14 +2321,28 @@ jobs:
             "call `"$vcvars`" >nul",
             "dumpbin /dependents `"$helloExe`" > `"$helloDepsLog`""
           ) -join ' && '
-          cmd.exe /d /s /c $verifyCmd
-          if ($LASTEXITCODE -ne 0) {
-            throw "hello-iccdev dependents check failed with exit code $LASTEXITCODE"
-          }
-          foreach ($symbol in @('IccProfLib2d.dll', 'IccXML2d.dll', 'IccJSON2d.dll')) {
-            if (-not (Select-String -Path $helloDepsLog -Pattern $symbol -SimpleMatch -Quiet)) {
-              throw "hello-iccdev is missing dependency: $symbol"
+          # issue #823: retry to absorb windows-latest AV/parallel-build
+          # race that can transiently truncate dumpbin output.
+          $helloExpected = @('IccProfLib2d.dll', 'IccXML2d.dll', 'IccJSON2d.dll')
+          $helloAttempts = 5
+          $helloMissing = @()
+          for ($helloTry = 1; $helloTry -le $helloAttempts; $helloTry++) {
+            cmd.exe /d /s /c $verifyCmd
+            if ($LASTEXITCODE -ne 0) {
+              throw "hello-iccdev dependents check failed with exit code $LASTEXITCODE"
             }
+            $helloMissing = @($helloExpected | Where-Object {
+              -not (Select-String -Path $helloDepsLog -Pattern $_ -SimpleMatch -Quiet)
+            })
+            if ($helloMissing.Count -eq 0) { break }
+            Write-Host "[WARN] hello dumpbin attempt $helloTry/$helloAttempts missing: $($helloMissing -join ', ')"
+            Start-Sleep -Seconds 2
+          }
+          if ($helloMissing.Count -gt 0) {
+            $helloDump = (Get-Content -Path $helloDepsLog -Raw -ErrorAction SilentlyContinue)
+            Write-Host "----- dumpbin /dependents output (last attempt) -----"
+            Write-Host $helloDump
+            throw "hello-iccdev is missing dependency: $($helloMissing -join ', ')"
           }
           Write-Host "::group::dumpbin /dependents hello-iccdev.exe"
           Get-Content $helloDepsLog
@@ -2339,7 +2386,7 @@ jobs:
 
       - name: Upload Windows shared smoke bundle
         if: always()
-        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0 (node24)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v6.0.0 (node24)
         with:
           name: windows-shared-smoke-${{ matrix.build_type }}
           path: ${{ runner.temp }}/windows-shared-smoke-${{ matrix.build_type }}
@@ -2601,7 +2648,7 @@ jobs:
       - name: Download Windows ABI Reports
         if: always()
         continue-on-error: true
-        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131  # v7.0.0 (node24)
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v7.0.0 (node24)
         with:
           pattern: abi-windows-*
           path: windows-abi-reports

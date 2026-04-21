@@ -199,7 +199,7 @@ jobs:
           echo "Total: $total files staged into $stage"
           echo ""
       - name: Upload Linux Artifacts
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: iccdev-linux-${{ matrix.compiler }}
           path: staging
@@ -354,7 +354,7 @@ jobs:
           echo "Total: $total files staged into $stage"
           echo ""
       - name: Upload macOS Artifacts
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: iccdev-macos-clang
           path: staging
@@ -534,10 +534,23 @@ jobs:
           Copy-Item -Path "Testing/Readme.md"  -Destination $stage -Force
           Copy-Item -Path "LICENSE.md" -Destination $stage -Force
           Copy-Item -Path "docs"       -Destination "$stage/docs" -Recurse -Force
-          # 4. Copy IIS installer script
-          $iisInstaller = "Tools/Winnt/IccIisIsapi/Install-IccIisIsapiSite.ps1"
-          if (Test-Path $iisInstaller) {
-            Copy-Item -Path $iisInstaller -Destination $stage -Force
+          # 4. Copy full IIS sample tree (web.config, html/css/js, assets/, all ps1 helpers)
+          #    under staging/iccDEV-Testing/IccIisIsapi/ so web.config + demo pages
+          #    resolve relative to the installed ISAPI extension.
+          $iisSrc = "Tools/Winnt/IccIisIsapi"
+          if (Test-Path $iisSrc) {
+            $iisDst = Join-Path $stage "IccIisIsapi"
+            New-Item -ItemType Directory -Force -Path $iisDst | Out-Null
+            # skip source files (*.cpp/*.h/*.def) and build outputs that are
+            # already captured by the flat DLL/EXE sweep above
+            Get-ChildItem -Path $iisSrc -Force -Exclude '*.cpp','*.h','*.def' |
+              Copy-Item -Destination $iisDst -Recurse -Force
+            # Back-compat: also keep Install-IccIisIsapiSite.ps1 at the stage
+            # root (existing docs reference that path).
+            $iisInstaller = Join-Path $iisSrc "Install-IccIisIsapiSite.ps1"
+            if (Test-Path $iisInstaller) {
+              Copy-Item -Path $iisInstaller -Destination $stage -Force
+            }
           }
           # 5. Generate path.bat helper script
           @'
@@ -581,7 +594,7 @@ jobs:
           }
           Write-Host "`nTotal: $count files staged into $stage`n"
       - name: Upload build artifacts
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: iccdev-windows-msvc
           path: staging
@@ -664,9 +677,9 @@ jobs:
           cd "$THIRD_PARTY"
 
           # libpng (checksum verified)
-          curl -sLO https://download.sourceforge.net/libpng/libpng-1.6.51.tar.gz
-          echo "ac25cafc2054cda3f6f0fe22ee9fc587024b99e01d03bd72b765824e48f39021  libpng-1.6.51.tar.gz" | sha256sum -c -
-          tar -xzf libpng-1.6.51.tar.gz && mv libpng-1.6.51 libpng && cd libpng
+          curl -sLO https://download.sourceforge.net/libpng/libpng-1.6.57.tar.gz
+          echo "01fdab044cdc575c74a9ef62a4042fbe24fea8bedfe8aa5c89f4467b781bbb60  libpng-1.6.57.tar.gz" | sha256sum -c -
+          tar -xzf libpng-1.6.57.tar.gz && mv libpng-1.6.57 libpng && cd libpng
           CPPFLAGS="-I$THIRD_PARTY/zlib" LDFLAGS="-L$THIRD_PARTY/zlib/out/lib" \
             emconfigure ./configure --disable-shared --enable-static --prefix="$THIRD_PARTY/libpng/out"
           emmake make -j$(nproc)
@@ -933,7 +946,7 @@ jobs:
           fi
 
       - name: Upload WASM Artifacts
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: iccdev-wasm-release
           path: |
@@ -995,7 +1008,7 @@ jobs:
           persist-credentials: false
 
       - name: Download all artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           path: artifacts
 
@@ -1038,7 +1051,7 @@ jobs:
           gh release delete latest --yes --cleanup-tag 2>/dev/null || true
 
       - name: Create latest release
-        uses: softprops/action-gh-release@153bb8e04406b158c6c84fc1615b65b24149a1fe
+        uses: softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda
         with:
           tag_name: latest
           name: "Latest Build"

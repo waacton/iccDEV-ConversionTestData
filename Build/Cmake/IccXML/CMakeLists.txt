@@ -31,7 +31,6 @@ SET( CFILES
 # Public headers — defined unconditionally for target properties
 SET( HEADERS_PUBLIC
       ${SRC_PATH}/IccXML/IccLibXML/IccIoXml.h
-      ${SRC_PATH}/IccXML/IccLibXML/IccLibXMLVer.h
       ${SRC_PATH}/IccXML/IccLibXML/IccMpeXmlFactory.h
       ${SRC_PATH}/IccXML/IccLibXML/IccMpeXml.h
       ${SRC_PATH}/IccXML/IccLibXML/IccProfileXml.h
@@ -61,6 +60,15 @@ configure_file(
     "${CMAKE_CURRENT_BINARY_DIR}/IccLibXMLVer.h"
     @ONLY
 )
+
+# Issue #823: install the generated header (with VERSION+GIT_COMMIT_HASH) so
+# downstream find_package(RefIccMAX) consumers see commit info, not just version.
+IF(ENABLE_INSTALL_RIM)
+  INSTALL( FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/IccLibXMLVer.h"
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${TARGET_INCLUDE_FOLDER}/${TARGET_NAME}
+    COMPONENT shared-proof )
+ENDIF(ENABLE_INSTALL_RIM)
 
 # Generated header dir — propagated via target_include_directories(PUBLIC) below
 

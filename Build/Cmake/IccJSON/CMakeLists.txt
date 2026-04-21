@@ -33,7 +33,8 @@ IF(ENABLE_INSTALL_RIM)
   )
   INSTALL( FILES
              ${HEADERS_PUBLIC}
-             DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${TARGET_INCLUDE_FOLDER}/${TARGET_NAME} )
+             DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${TARGET_INCLUDE_FOLDER}/${TARGET_NAME}
+             COMPONENT shared-proof )
 ENDIF(ENABLE_INSTALL_RIM)
 
 # Generate version header with git commit hash (reuses the project version string)
@@ -50,6 +51,15 @@ configure_file(
     "${CMAKE_CURRENT_BINARY_DIR}/IccLibJSONVer.h"
     @ONLY
 )
+
+# Issue #823: install the generated header (with VERSION+GIT_COMMIT_HASH) so
+# downstream find_package(RefIccMAX) consumers see commit info, not just version.
+IF(ENABLE_INSTALL_RIM)
+  INSTALL( FILES
+    "${CMAKE_CURRENT_BINARY_DIR}/IccLibJSONVer.h"
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/${TARGET_INCLUDE_FOLDER}/${TARGET_NAME}
+    COMPONENT shared-proof )
+ENDIF(ENABLE_INSTALL_RIM)
 
 include_directories("${CMAKE_CURRENT_BINARY_DIR}")
 
@@ -91,10 +101,13 @@ IF(ENABLE_SHARED_LIBS)
   TARGET_LINK_LIBRARIES(${TARGET_NAME} PUBLIC ${TARGET_LIB_ICCPROFLIB} nlohmann_json::nlohmann_json ${EXTRA_LIBS} ${EXTRA_LIBS_CS})
 
   IF(ENABLE_INSTALL_RIM)
+    # Issue #823: export to RefIccMAXTargets so find_package(RefIccMAX CONFIG)
+    # consumers (e.g. examples/hello-iccdev) can resolve RefIccMAX::IccJSON2.
     INSTALL(TARGETS ${TARGET_NAME}
-            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+            EXPORT  RefIccMAXTargets
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} COMPONENT shared-proof
+            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT shared-proof
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT shared-proof)
   ENDIF()
 ENDIF()
 
@@ -118,13 +131,20 @@ IF(ENABLE_STATIC_LIBS)
   TARGET_LINK_LIBRARIES(${TARGET_NAME}-static PUBLIC ${TARGET_LIB_ICCPROFLIB} nlohmann_json::nlohmann_json ${EXTRA_LIBS} ${EXTRA_LIBS_CS})
 
   IF(ENABLE_INSTALL_RIM)
+    # Issue #823: export to RefIccMAXTargets so find_package(RefIccMAX CONFIG)
+    # consumers can resolve RefIccMAX::IccJSON2-static.
     INSTALL(TARGETS ${TARGET_NAME}-static
-            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-            LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+            EXPORT  RefIccMAXTargets
+            ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR} COMPONENT shared-proof)
   ENDIF()
 
-  IF(WIN32 AND ENABLE_SHARED_LIBS)
+  # Issue #823: When ENABLE_SHARED_LIBS is also ON, the SHARED build already
+  # produces ${TARGET_NAME}.lib as its import library in the same directory.
+  # Aliasing the static archive to that name overwrites the import library,
+  # which causes consumers (iccIisIsapi, hello-iccdev) to silently statically
+  # link IccJSON2 and lose the IccJSON2.dll runtime dependency. Only create
+  # the convenience alias when the shared import library is NOT being built.
+  IF(WIN32 AND NOT ENABLE_SHARED_LIBS)
     ADD_CUSTOM_COMMAND(TARGET ${TARGET_NAME}-static POST_BUILD
       COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "$<TARGET_FILE:${TARGET_NAME}-static>"

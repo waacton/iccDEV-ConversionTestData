@@ -84,7 +84,7 @@ jobs:
 
       - name: Build and push
         id: build-push
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7.1.0
         with:
           context: .
           file: ./${{ matrix.dockerfile }}
@@ -98,7 +98,7 @@ jobs:
 
       - name: Generate SBOM
         if: github.event_name != 'pull_request'
-        uses: anchore/sbom-action@2d094306a78d7bde297684f0120dfb41969c38c2 # v0.22.2
+        uses: anchore/sbom-action@f0d33c151c04af6fcbf4363834e838fcc7c87783 # v0.22.2
         with:
           image: ${{ steps.image.outputs.name }}@${{ steps.build-push.outputs.digest }}
           format: spdx-json
@@ -123,7 +123,7 @@ jobs:
 
       - name: Upload SBOM
         if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: iccdev${{ matrix.suffix }}-sbom
           path: sbom.spdx.json
