@@ -67,9 +67,18 @@
 #include "IccTagFactory.h"
 
 #ifdef WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #ifdef GetClassName
 #undef GetClassName
+#endif
+#ifdef max
+#undef max
+#endif
+#ifdef min
+#undef min
 #endif
 #endif
 #include <cstring> /* C strings strcpy, memcpy ... */
@@ -459,6 +468,19 @@ size_t icXmlDumpHexData(std::string &xml, std::string blanks, void *pBuf, size_t
     xml += "\n";
   }
   return i;
+}
+
+bool icXmlValidateFileCount(size_t value, icUInt32Number &count, std::string &parseStr, const char *filename)
+{
+  if (value > (size_t)std::numeric_limits<icUInt32Number>::max()) {
+    parseStr += "Error! - File '";
+    parseStr += filename;
+    parseStr += "' exceeds supported XML import size.\n";
+    return false;
+  }
+
+  count = (icUInt32Number)value;
+  return true;
 }
 
 xmlAttr *icXmlFindAttr(xmlNode *pNode, const char *szAttrName)
