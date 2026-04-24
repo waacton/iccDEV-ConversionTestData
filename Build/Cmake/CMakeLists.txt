@@ -1018,6 +1018,7 @@ if(APPLE)
   message(STATUS "Final macOS architectures: ${CMAKE_OSX_ARCHITECTURES}")
 
   # macOS hardening flags (parity with Linux)
+  # Base set: works on any C++17-capable compiler.
   add_compile_options(
     -Wall
     -Wextra
@@ -1025,8 +1026,31 @@ if(APPLE)
     -Wformat-security
     -Wimplicit-fallthrough
     -Wsign-compare
+    -Wnon-virtual-dtor
+    -Wuninitialized
     -fstack-protector-strong
   )
+
+  # Strict warning tier: requires GCC 15+ or Clang 14+ for reliable analysis.
+  # Older compilers still build; they just produce fewer diagnostics.
+  set(_iccdev_strict_capable FALSE)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS "15.0")
+    set(_iccdev_strict_capable TRUE)
+  elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS "14.0")
+    set(_iccdev_strict_capable TRUE)
+  endif()
+  if(_iccdev_strict_capable)
+    add_compile_options(
+      -Werror=uninitialized
+      -Wshadow
+      -Wnull-dereference
+      -Wundef
+      -Wpointer-arith
+    )
+    message(STATUS "macOS: strict warnings ENABLED (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION})")
+  else()
+    message(STATUS "macOS: strict warnings DISABLED -- ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} below floor (GCC 15 / Clang 14). Base hardening still active.")
+  endif()
 
   # Fortify source for optimized builds (requires -O1 or higher)
   if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
@@ -1038,7 +1062,8 @@ if(APPLE)
 elseif(UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
   message(STATUS "Detected platform: Linux")
 
-  # Recommended flags for Linux/Clang or GCC
+  # Recommended flags for Linux/Clang or GCC.
+  # Base set: works on any C++17-capable compiler (GCC 11+, Clang 14+).
   add_compile_options(
     -Wall
     -Wextra
@@ -1046,9 +1071,49 @@ elseif(UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
     -Wformat-security
     -Wimplicit-fallthrough
     -Wsign-compare
+    -Wnon-virtual-dtor
+    -Wuninitialized
     -fstack-protector-strong
     -fstack-clash-protection
   )
+
+  # Strict warning tier: requires GCC 15+ or Clang 14+ so all contributors and
+  # CI see the same diagnostics. Older toolchains still build; they get the
+  # base set above plus reduced analysis. ci-docker (ubuntu:26.04 / GCC 15)
+  # and the iccDEV Tool Tests workflow (clang-18) both meet the floor.
+  set(_iccdev_strict_capable FALSE)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS "15.0")
+    set(_iccdev_strict_capable TRUE)
+  elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS "14.0")
+    set(_iccdev_strict_capable TRUE)
+  endif()
+  if(_iccdev_strict_capable)
+    add_compile_options(
+      -Werror=uninitialized
+      -Wshadow
+      -Wnull-dereference
+      -Wundef
+      -Wpointer-arith
+    )
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+      add_compile_options(-Wlogical-op)
+    endif()
+    message(STATUS "Linux: strict warnings ENABLED (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION})")
+  else()
+    message(STATUS "Linux: strict warnings DISABLED -- ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} below floor (GCC 15 / Clang 14). Base hardening still active. Upgrade to match CI diagnostics.")
+  endif()
+
+  # Opt-in: Effective C++ ruleset (currently ~3000 sites; multi-PR cleanup)
+  option(ENABLE_STRICT_EFFC "Enable -Weffc++ (Effective C++ guidelines)" OFF)
+  if(ENABLE_STRICT_EFFC)
+    add_compile_options(-Weffc++)
+  endif()
+
+  # Opt-in: float-to-double promotion warnings (~2000 sites; library-wide cleanup)
+  option(ENABLE_DOUBLE_PROMOTION "Enable -Wdouble-promotion" OFF)
+  if(ENABLE_DOUBLE_PROMOTION)
+    add_compile_options(-Wdouble-promotion)
+  endif()
 
   # Hardening: RELRO and BIND_NOW for executables
   add_link_options(-Wl,-z,relro,-z,now)
@@ -1065,6 +1130,7 @@ elseif(EMSCRIPTEN)
 
   # Emscripten uses its own toolchain -- no ELF hardening, no stack-protector.
   # Warning flags only; linker/runtime flags are set by emcmake/emcc.
+  # Base set: works on any C++17-capable Emscripten toolchain.
   add_compile_options(
     -Wall
     -Wextra
@@ -1072,7 +1138,23 @@ elseif(EMSCRIPTEN)
     -Wformat-security
     -Wimplicit-fallthrough
     -Wsign-compare
+    -Wnon-virtual-dtor
+    -Wuninitialized
   )
+
+  # Strict tier (Emscripten ships clang; gate on Clang 14+ for parity with Linux/macOS)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS "14.0")
+    add_compile_options(
+      -Werror=uninitialized
+      -Wshadow
+      -Wnull-dereference
+      -Wundef
+      -Wpointer-arith
+    )
+    message(STATUS "Emscripten: strict warnings ENABLED (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION})")
+  else()
+    message(STATUS "Emscripten: strict warnings DISABLED -- ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} below floor (Clang 14).")
+  endif()
 
   message(STATUS "Emscripten build: Warning flags applied (no ELF hardening).")
 
