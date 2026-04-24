@@ -41,7 +41,7 @@ else()
         OUT_SOURCE_PATH SOURCE_PATH
         REPO InternationalColorConsortium/iccDEV
         REF "v${VERSION}"
-        SHA512 040c039df898e79ad8da74bdd6f944ffd96f828d6df260481af44d8417d5fac4926554f43ffaa1907a2ae4653edc749008edc40d4c9314181a5191c1772135bf
+        SHA512 df284c3d39c969283b8d616a00970d228edf6b3ec8710206e9959c173dee7f63bf1cbbe6786c3f98763bd99bef924736e79c7f8e998cbe38d8539fec2d48c8ea
         HEAD_REF master
     )
 endif()
