@@ -162,7 +162,24 @@ const std::string icGetDeviceAttrName(icUInt64Number devAttr);
 const std::string icGetHeaderFlagsName(icUInt32Number flags, bool bUsesMCS=false);
 const std::string icGetPadSpace(double value);
 
-
+// Safe unsigned-integer parsers for XML attribute values.
+// Return false (leaving `out` unchanged) when:
+//   - the string is NULL or empty,
+//   - it has a leading '-' (explicitly rejected; strtoul would wrap),
+//   - it contains non-digit characters or trailing whitespace,
+//   - the value exceeds max_value, or
+//   - strtoul/strtoull sets errno == ERANGE.
+// These are stricter than atoi: they do not silently narrow, do not
+// accept trailing garbage, and do not wrap negative inputs.
+//
+//   icUInt16Number nRows = 0;
+//   if (!icXmlParseU16(icXmlAttrValue(node, "Rows"), nRows))
+//     return false;
+//
+bool icXmlParseU16(const char *s, icUInt16Number &out,
+                   icUInt16Number max_value = 0xFFFFu);
+bool icXmlParseU32(const char *s, icUInt32Number &out,
+                   icUInt32Number max_value = 0xFFFFFFFFu);
 
 
 #endif //_ICCUTILXML_H
