@@ -229,11 +229,11 @@ static bool icXmlParseTextString(xmlNode *pNode, std::string &parseStr, std::str
 
         // file exists
         if (filename && filename[0]) {        
-          CIccIO *file = IccOpenFileIO(filename, "rb");        
+          CIccIO *file = IccXmlSafeOpenFileIO(filename, "rb");        
           if (!file){          
             parseStr += "Error! - File '";
             parseStr += filename;
-            parseStr +="' not found.\n";
+            parseStr += "' could not be opened (file includes may be disabled or path rejected as unsafe).\n";
             delete file;
             return false;
           }
@@ -434,12 +434,12 @@ bool CIccTagXmlTextDescription::ParseXml(xmlNode *pNode, std::string &parseStr)
 
   // file exists
   if (filename && filename[0]) {
-    CIccIO *file = IccOpenFileIO(filename, "rb");
+    CIccIO *file = IccXmlSafeOpenFileIO(filename, "rb");
 
     if (!file){
       parseStr += "Error! - File '";
       parseStr += filename;
-      parseStr +="' not found.\n";
+      parseStr += "' could not be opened (file includes may be disabled or path rejected as unsafe).\n";
       delete file;
       return false;
     }
@@ -1547,11 +1547,11 @@ bool CIccTagXmlFloatNum<T, A, Tsig>::ParseXml(xmlNode *pNode, std::string &parse
   A a;
 
   if (filename && filename[0]) {
-    CIccIO *file = IccOpenFileIO(filename, "rb");
+    CIccIO *file = IccXmlSafeOpenFileIO(filename, "rb");
     if (!file){
       parseStr += "Error! - File '";
       parseStr += filename;
-      parseStr +="' not found.\n";
+      parseStr += "' could not be opened (file includes may be disabled or path rejected as unsafe).\n";
       delete file;
       return false;
     }
@@ -2688,11 +2688,11 @@ bool CIccTagXmlCurve::ParseXml(xmlNode *pNode, icConvertType nType, std::string 
 
     // file exists
     if (filename && filename[0]) {
-      CIccIO *file = IccOpenFileIO(filename, "rb");
+      CIccIO *file = IccXmlSafeOpenFileIO(filename, "rb");
       if (!file){
         parseStr += "Error! - File '";
         parseStr += filename;
-        parseStr +="' not found.\n";
+        parseStr += "' could not be opened (file includes may be disabled or path rejected as unsafe).\n";
         delete file;
         return false;
       }
@@ -3555,13 +3555,13 @@ CIccCLUT *icCLutFromXml(xmlNode *pNode, int nIn, int nOut, icConvertType nType, 
     }
 
     if (filename && filename[0]) {
-      CIccIO *file = IccOpenFileIO(filename, "rb");
+      CIccIO *file = IccXmlSafeOpenFileIO(filename, "rb");
 
       if (!file) {
         // added error message
         parseStr += "Error! - File '";
         parseStr += filename;
-        parseStr +="' not found.\n";
+        parseStr += "' could not be opened (file includes may be disabled or path rejected as unsafe).\n";
         delete pCLUT;
         return NULL;
       }
@@ -5342,11 +5342,11 @@ bool CIccTagXmlEmbeddedHeightImage::ParseXml(xmlNode *pNode, std::string &parseS
 
     // file exists
     if (filename && filename[0]) {
-      CIccIO *file = IccOpenFileIO(filename, "rb");
+      CIccIO *file = IccXmlSafeOpenFileIO(filename, "rb");
       if (!file) {
         parseStr += "Error! - File '";
         parseStr += filename;
-        parseStr += "' not found.\n";
+        parseStr += "' could not be opened (file includes may be disabled or path rejected as unsafe).\n";
         delete file;
         return false;
       }
@@ -5443,11 +5443,11 @@ bool CIccTagXmlEmbeddedNormalImage::ParseXml(xmlNode *pNode, std::string &parseS
 
     // file exists
     if (filename && filename[0]) {
-      CIccIO *file = IccOpenFileIO(filename, "rb");
+      CIccIO *file = IccXmlSafeOpenFileIO(filename, "rb");
       if (!file) {
         parseStr += "Error! - File '";
         parseStr += filename;
-        parseStr += "' not found.\n";
+        parseStr += "' could not be opened (file includes may be disabled or path rejected as unsafe).\n";
         delete file;
         return false;
       }
