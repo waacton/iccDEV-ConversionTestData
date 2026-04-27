@@ -862,7 +862,7 @@ void CIccCfgProfileSequence::toJson(json& obj) const
 
 CIccCfgPccWeight::CIccCfgPccWeight()
 {
-
+  reset();
 }
 
 CIccCfgPccWeight::~CIccCfgPccWeight() {
@@ -871,12 +871,16 @@ CIccCfgPccWeight::~CIccCfgPccWeight() {
 
 void CIccCfgPccWeight::reset()
 {
-
+  m_pccPath.clear();
+  m_dWeight = 0.0f;
 }
 
-int CIccCfgPccWeight::fromArgs(const char** args, int nArg, bool /*bReset*/)
+int CIccCfgPccWeight::fromArgs(const char** args, int nArg, bool bReset)
 {
   int nUsed = 0;
+
+  if (bReset)
+    reset();
 
   if (nArg >= 2) {
     m_pccPath = args[0];
@@ -889,10 +893,13 @@ int CIccCfgPccWeight::fromArgs(const char** args, int nArg, bool /*bReset*/)
   return nUsed;
 }
 
-bool CIccCfgPccWeight::fromJson(json j, bool /*bReset*/)
+bool CIccCfgPccWeight::fromJson(json j, bool bReset)
 {
   if (!j.is_object())
     return false;
+
+  if (bReset)
+    reset();
 
   jsonToValue(j["pccFile"], m_pccPath);
   jsonToValue(j["weight"], m_dWeight);
@@ -908,10 +915,18 @@ void CIccCfgPccWeight::toJson(json& obj) const
 
 CIccCfgSearchApply::CIccCfgSearchApply()
 {
+  reset();
 }
 
 void CIccCfgSearchApply::reset()
 {
+  m_bInitialized = false;
+  m_intentInitial = icUnknownIntent;
+  m_transformInitial = icXformLutColor;
+  m_useD2BxB2DxInitial = false;
+  m_adjustPcsLuminanceInitial = false;
+  m_useV5SubProfileInitial = false;
+  m_interpolationInitial = icInterpTetrahedral;
   m_pccWeights.clear();
   m_profiles.clear();
 }
@@ -1079,6 +1094,9 @@ void CIccCfgSearchApply::toJsonProfiles(json& obj) const
 
 bool CIccCfgSearchApply::fromJsonPccWeights(json j)
 {
+  if (j.is_null())
+    return true;
+
   if (!j.is_array())
     return false;
 
@@ -1211,6 +1229,7 @@ public:
     if (isEOF())
       return false;
     std::string str;
+    bool bHasField = false;
 
     int c = 0;
     while (!isEOF()) {
@@ -1222,15 +1241,17 @@ public:
           return false;
         break;
       }
-      else if (c == '\n')
-        continue;
-      else if (c == '\r') {
-        line.push_back(str);
+      else if (c == '\n' || c == '\r') {
+        if (c == '\r' && m_f->peek() == '\n')
+          m_f->get();
+        if (str.size() || bHasField)
+          line.push_back(str);
         break;
       }
       else if (c == '\t') {
         line.push_back(str);
         str.clear();
+        bHasField = true;
       }
       else {
         str += c;
@@ -1250,7 +1271,7 @@ public:
   bool findTokenLine(std::vector<std::string>& line, const char* szToken) {
     while (parseNextLine(line)) {
       if (line[0] == szToken)
-        break;
+        return true;
     }
     return false;
   }
@@ -1471,7 +1492,7 @@ bool CIccCfgColorData::fromIt8(const char* filename, bool bReset)
   std::vector<std::string> line;
   if (!f.findTokenLine(line, "CGATS.17"))
     return false;
-  if (!f.findTokenLine(line, "NUBER_OF_FIELDS"))
+  if (!f.findTokenLine(line, "NUMBER_OF_FIELDS"))
     return false;
   size_t nFields = 0;
   if (line.size() >= 2) {
