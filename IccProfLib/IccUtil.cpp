@@ -75,6 +75,7 @@
 #include "IccArrayFactory.h"
 #include "IccMpeFactory.h"
 #include "IccDefs.h"
+#include "IccConvertUTF.h"
 #include <cstdlib>
 #include <memory.h>
 #include <cctype>
@@ -646,7 +647,7 @@ icFloatNumber ICCPROFLIB_API icF16toF(icFloat16Number num)
   icUInt32Number rv = 0;    // because static analysis isn't perfect
   icUInt32Number rvsgn, rvexp, rvmnt;
   icInt32Number tmpexp;
-  icFloatNumber * rvfp, rvf;
+  icFloatNumber rvf = 0.0f;
   int exp;
 
   if (!(num & 0x7FFF)) {
@@ -662,7 +663,7 @@ icFloatNumber ICCPROFLIB_API icF16toF(icFloat16Number num)
         nummnt <<= 1;
       } while (!(nummnt & 0x0400)); // Shift until leading bit overflows into exponent bit
       rvsgn = ((icUInt32Number) numsgn) << 16;
-      tmpexp = ((icUInt32Number) (numexp >> 10)) - 15 + 127 - exp;
+      tmpexp = ((icInt32Number)(numexp >> 10)) - 15 + 127 - exp;
       rvexp = (icUInt32Number) (tmpexp << 23);
       rvmnt = ((icUInt32Number) (nummnt & 0x03FFu)) << 13;
       rv = (rvsgn | rvexp | rvmnt);
@@ -674,14 +675,14 @@ icFloatNumber ICCPROFLIB_API icF16toF(icFloat16Number num)
       }
     } else {
       rvsgn = ((icUInt32Number) numsgn) << 16;
-      tmpexp = ((icUInt32Number) (numexp >> 10)) - 15 + 127;
+      tmpexp = ((icInt32Number)(numexp >> 10)) - 15 + 127;
       rvexp = (icUInt32Number) (tmpexp << 23);
       rvmnt = ((icUInt32Number) nummnt) << 13;
       rv = (rvsgn | rvexp | rvmnt);
     }
   }
-  rvfp = (icFloatNumber*)&rv;
-  rvf = *rvfp;
+  static_assert(sizeof(rvf) == sizeof(rv), "icFloatNumber must match icUInt32Number width for icF16toF");
+  memcpy(&rvf, &rv, sizeof(rvf));
   return rvf;
 }
 
@@ -787,7 +788,7 @@ icUInt8Number icABtoU8(icFloatNumber num)
   icFloatNumber v = num + 128.0f;
   
   if (std::isnan(num))
-    num = 0;
+    v = 128.0f;
   else if (v<0)
     v=0;
   else if (v>255)
@@ -1079,13 +1080,12 @@ const icChar *icGetSig(icChar *pBuf, size_t bufSize, icUInt32Number nSig, bool b
   // 126 is ~, and 127 is DEL, over 127 is undefined and depends on local code page
   // isprint() lies about values > 127 on MacOS and Linux, haven't tested Windows
   for (i=1; i<5; i++) {
-    c=(icUInt8Number)(sig>>24);
+    c=(icUInt8Number)(sig>>(32-i*8));
     if (!isprint(c) || c > 126) {
       c='?';
       bGetHexVal = true;
     }
-    pBuf[i]=c;
-    sig <<=8;
+    pBuf[i]=(icChar)c;
   }
 
   if (bGetHexVal)
@@ -1100,7 +1100,6 @@ const icChar *icGetSigStr(icChar *pBuf, size_t bufSize, icUInt32Number nSig)
 {
   int i, j=-1;
   icUInt32Number sig=nSig;
-  icUInt8Number c;
   bool bGetHexVal = false;
 
   if (!nSig) {
@@ -1115,7 +1114,7 @@ const icChar *icGetSigStr(icChar *pBuf, size_t bufSize, icUInt32Number nSig)
   }
 
   for (i=0; i<4; i++) {
-    c=(icUInt8Number)(sig>>24);
+    icUInt8Number c = (icUInt8Number)(sig >> (24-(i*8)));
     if (!c) {
       j=i;
     }
@@ -1126,8 +1125,7 @@ const icChar *icGetSigStr(icChar *pBuf, size_t bufSize, icUInt32Number nSig)
       c='?';
       bGetHexVal = true;
     }
-    pBuf[i]=c;
-    sig <<=8;
+    pBuf[i]=(icChar)c;
   }
 
   if (bGetHexVal)
@@ -1164,8 +1162,7 @@ const icChar *icGetColorSig(icChar *pBuf, size_t bufSize, icUInt32Number nSig, b
 
       pBuf[0]='\"';
       pBuf[1] = (icUInt8Number)(sig>>24);
-      sig<<=8;
-      pBuf[2] = (icUInt8Number)(sig>>24);
+      pBuf[2] = (icUInt8Number)(sig>>16);
       snprintf(pBuf+3, bufSize-3, "%04X\"", icNumColorSpaceChannels(nSig));
       return pBuf;
     
@@ -1178,13 +1175,12 @@ const icChar *icGetColorSig(icChar *pBuf, size_t bufSize, icUInt32Number nSig, b
 
       pBuf[0] = '\'';
       for (i=1; i<5; i++) {
-        c=(icUInt8Number)(sig>>24);
+        c=(icUInt8Number)(sig>>(32-i*8));
         if (!isprint(c) || c > 126) {
           c = '?';
           bNeedHexVal = true;
         }
-        pBuf[i]=c;
-        sig <<=8;
+        pBuf[i]=(icChar)c;
       }
 
       if (bGetHexVal)
@@ -1225,8 +1221,7 @@ const icChar *icGetColorSigStr(icChar *pBuf, size_t bufSize, icUInt32Number nSig
     case icSigSparseMatrixReflectanceData:
 
       pBuf[0] = (icUInt8Number)(sig>>24);
-      sig<<=8;
-      pBuf[1] = (icUInt8Number)(sig>>24);
+      pBuf[1] = (icUInt8Number)(sig>>16);
       snprintf(pBuf+2, bufSize-2, "%04X", icNumColorSpaceChannels(nSig));
       return pBuf;
 
@@ -1238,7 +1233,7 @@ const icChar *icGetColorSigStr(icChar *pBuf, size_t bufSize, icUInt32Number nSig
         bool bGetHexVal = false;
 
         for (i=0; i<4; i++) {
-          c=(icUInt8Number)(sig>>24);
+          c=(icUInt8Number)(sig>>(24-i*8));
           if (!c) {
             j=i;
           }
@@ -1249,8 +1244,7 @@ const icChar *icGetColorSigStr(icChar *pBuf, size_t bufSize, icUInt32Number nSig
             c='?';
             bGetHexVal = true;
           }
-          pBuf[i]=c;
-          sig <<=8;
+          pBuf[i]=(icChar)c;
         }
 
         if (bGetHexVal)
@@ -1333,7 +1327,7 @@ icSignature icGetSecondSigPathSig(std::string sigPath)
 
 icUInt32Number icGetSigVal(const icChar *pBuf)
 {
-  icUInt32Number v;
+  icUInt32Number v = 0;
   
   if (!pBuf)    // can't return an error, so do something sane to avoid a segfault
     return 0;
@@ -1343,32 +1337,32 @@ icUInt32Number icGetSigVal(const icChar *pBuf)
       return 0;
 
     case 1:
-      return (icUInt32Number)((((unsigned long)pBuf[0])<<24) +
+      return (icUInt32Number)((((unsigned long)(unsigned char)pBuf[0])<<24) +
                               0x202020);
 
     case 2:
-      return (icUInt32Number)((((unsigned long)pBuf[0])<<24) +
-                              (((unsigned long)pBuf[1])<<16) +
+      return (icUInt32Number)((((unsigned long)(unsigned char)pBuf[0])<<24) +
+                              (((unsigned long)(unsigned char)pBuf[1])<<16) +
                               0x2020);
 
     case 3:
-      return (icUInt32Number)((((unsigned long)pBuf[0])<<24) +
-                              (((unsigned long)pBuf[1])<<16) +
-                              (((unsigned long)pBuf[2])<<8) +
+      return (icUInt32Number)((((unsigned long)(unsigned char)pBuf[0])<<24) +
+                              (((unsigned long)(unsigned char)pBuf[1])<<16) +
+                              (((unsigned long)(unsigned char)pBuf[2])<<8) +
                               0x20);
 
     case 4:
     default:
-      return (icUInt32Number)((((unsigned long)pBuf[0])<<24) +
-                              (((unsigned long)pBuf[1])<<16) +
-                              (((unsigned long)pBuf[2])<<8) +
-                              (((unsigned long)pBuf[3])));
+      return (icUInt32Number)((((unsigned long)(unsigned char)pBuf[0])<<24) +
+                              (((unsigned long)(unsigned char)pBuf[1])<<16) +
+                              (((unsigned long)(unsigned char)pBuf[2])<<8) +
+                              (((unsigned long)(unsigned char)pBuf[3])));
 
     case 6:  //Channel based color signatures
       sscanf(pBuf+2, "%x", &v);
 
-      return (icUInt32Number)((((unsigned long)pBuf[0])<<24) +
-                              (((unsigned long)pBuf[1])<<16) +
+      return (icUInt32Number)((((unsigned long)(unsigned char)pBuf[0])<<24) +
+                              (((unsigned long)(unsigned char)pBuf[1])<<16) +
                               v);
 
     case 8:
@@ -1467,7 +1461,7 @@ icUInt8Number icGetStorageTypeBytes(icUInt16Number nStorageType)
 }
 
 
-icUInt32Number icGetMaterialColorSpaceSamples(icMaterialColorSignature sig)
+icUInt32Number icGetMultiplexColorSpaceSamples(icMultiplexColorSignature sig)
 {
   if (icGetColorSpaceType((icColorSpaceSignature)sig)!=icSigSrcMCSChannelData)
     return 0;
@@ -1907,14 +1901,14 @@ const icChar *CIccInfo::GetProfileClassSigName(icProfileClassSignature sig)
   case icSigColorEncodingClass:
     return "ColorEncodingClass";
 
-  case icSigMaterialIdentificationClass:
-    return "MaterialIdentificationClass";
+  case icSigMultiplexIdentificationClass:
+    return "MultiplexIdentificationClass";
 
-  case icSigMaterialVisualizationClass:
-    return "MaterialVisualizationClass";
+  case icSigMultiplexVisualizationClass:
+    return "MultiplexVisualizationClass";
 
-  case icSigMaterialLinkClass:
-    return "MaterialLinkClass";
+  case icSigMultiplexLinkClass:
+    return "MultiplexLinkClass";
 
   default:
     return GetUnknownName(sig);
@@ -2198,7 +2192,7 @@ const icChar *CIccInfo::GetRenderingIntentName(icRenderingIntent val, bool bIsV5
       return "Absolute Colorimetric";
 
   default:
-    snprintf(m_szStr, m_bufSize, "Unknown Intent '%d", val);
+    snprintf(m_szStr, m_bufSize, "Unknown Intent '%d'", val);
     return m_szStr;
   }
 }
@@ -2231,7 +2225,7 @@ const icChar *CIccInfo::GetSpotShapeName(icSpotShape val)
     return "Spot Shape Cross";
 
   default:
-    snprintf(m_szStr, m_bufSize, "Unknown Spot Shape '%d", val);
+    snprintf(m_szStr, m_bufSize, "Unknown Spot Shape '%d'", val);
     return m_szStr;
   }
 }
@@ -2249,7 +2243,7 @@ const icChar *CIccInfo::GetStandardObserverName(icStandardObserver val)
     return "CIE 1964 (ten degree) standard observer";
 
   default:
-    snprintf(m_szStr, m_bufSize, "Unknown Observer '%d", val);
+    snprintf(m_szStr, m_bufSize, "Unknown Observer '%d'", val);
     return m_szStr;
   }
 }
@@ -2327,7 +2321,7 @@ const icChar *CIccInfo::GetIlluminantName(icIlluminant val)
     return "Illuminant F12";
 
   default:
-    snprintf(m_szStr, m_bufSize, "Unknown Illuminant '%d", val);
+    snprintf(m_szStr, m_bufSize, "Unknown Illuminant '%d'", val);
     return m_szStr;
   }
 }
@@ -2696,6 +2690,318 @@ CIccPixelBuf::~CIccPixelBuf()
 {
   if (m_pixel && m_pixel!=m_buf)
     delete [] m_pixel;
+}
+
+// ===========================================================================
+// CIccUTF16String  (moved from IccUtilXml for shared use by IccJSON)
+// ===========================================================================
+
+CIccUTF16String::CIccUTF16String()
+{
+  m_alloc = 64;
+  m_len = 0;
+  m_str = (icUInt16Number*)calloc(m_alloc, sizeof(icUInt16Number));
+  if (!m_str) {
+    m_alloc = 0;
+  }
+}
+
+CIccUTF16String::CIccUTF16String(const icUInt16Number *uzStr)
+{
+  m_len = WStrlen(uzStr);
+  m_alloc = AllocSize(m_len);
+  m_str = (icUInt16Number*)malloc(m_alloc * sizeof(icUInt16Number));
+  if (!m_str) {
+    m_alloc = 0;
+    m_len = 0;
+    return;
+  }
+  memcpy(m_str, uzStr, (m_len + 1) * sizeof(icUInt16Number));
+}
+
+CIccUTF16String::CIccUTF16String(const char *szStr)
+{
+  size_t sizeSrc = strlen(szStr);
+  if (sizeSrc) {
+    m_alloc = AllocSize(sizeSrc * 2);
+    m_str = (UTF16*)calloc(m_alloc, sizeof(icUInt16Number));
+    if (!m_str) {
+      m_alloc = 0;
+      m_len = 0;
+      return;
+    }
+    UTF16 *szDest = m_str;
+    icConvertUTF8toUTF16((const UTF8**)&szStr, (const UTF8*)&szStr[sizeSrc], &szDest, &szDest[m_alloc], lenientConversion);
+    if (m_str[0] == 0xfeff) {
+      size_t i;
+      for (i = 1; m_str[i]; i++) m_str[i-1] = m_str[i];
+      m_str[i-1] = 0;
+    }
+    m_len = WStrlen(m_str);
+  } else {
+    m_alloc = 64;
+    m_len = 0;
+    m_str = (icUInt16Number*)calloc(m_alloc, sizeof(icUInt16Number));
+    if (!m_str) {
+      m_alloc = 0;
+    }
+  }
+}
+
+CIccUTF16String::CIccUTF16String(const CIccUTF16String &str)
+{
+  m_alloc = str.m_alloc;
+  m_len = str.m_len;
+  m_str = (icUInt16Number*)malloc(m_alloc * sizeof(icUInt16Number));
+  if (!m_str) {
+    m_alloc = 0;
+    m_len = 0;
+    return;
+  }
+  memcpy(m_str, str.m_str, m_alloc * sizeof(icUInt16Number));
+}
+
+CIccUTF16String::~CIccUTF16String()
+{
+  free(m_str);
+}
+
+void CIccUTF16String::Clear()
+{
+  m_len = 0;
+  m_str[0] = 0;
+}
+
+bool CIccUTF16String::Resize(size_t len)
+{
+  if (len > m_alloc) {
+    size_t nAlloc = AllocSize(len);
+    m_str = (icUInt16Number*)icRealloc(m_str, nAlloc * sizeof(icUInt16Number));
+    if (!m_str) { m_len = 0; return false; }
+    m_alloc = nAlloc;
+  }
+  if (len > m_len)
+    memset(&m_str[m_len], 0x0020, (len - m_len) * sizeof(icUInt16Number));
+  m_len = len;
+  m_str[m_len] = 0;
+  return true;
+}
+
+size_t CIccUTF16String::WStrlen(const icUInt16Number *uzStr)
+{
+  size_t n = 0;
+  while (uzStr[n]) n++;
+  return n;
+}
+
+CIccUTF16String& CIccUTF16String::operator=(const CIccUTF16String &wstr)
+{
+  if (m_alloc <= wstr.m_alloc) {
+    m_str = (icUInt16Number*)icRealloc(m_str, wstr.m_alloc * sizeof(icUInt16Number));
+    m_alloc = m_str ? wstr.m_alloc : 0;
+  }
+  if (m_str) {
+    m_len = wstr.m_len;
+    memcpy(m_str, wstr.m_str, (m_len + 1) * sizeof(icUInt16Number));
+  } else {
+    m_len = 0;
+  }
+  return *this;
+}
+
+CIccUTF16String& CIccUTF16String::operator=(const char *szStr)
+{
+  FromUtf8(szStr, 0);
+  return *this;
+}
+
+CIccUTF16String& CIccUTF16String::operator=(const icUInt16Number *uzStr)
+{
+  size_t n = WStrlen(uzStr);
+  size_t nAlloc = AllocSize(n);
+  if (m_alloc <= nAlloc) {
+    m_str = (icUInt16Number*)icRealloc(m_str, nAlloc * sizeof(icUInt16Number));
+    m_alloc = m_str ? nAlloc : 0;
+  }
+  if (m_str) {
+    m_len = n;
+    memcpy(m_str, uzStr, (m_len + 1) * sizeof(icUInt16Number));
+  } else {
+    m_len = 0;
+  }
+  return *this;
+}
+
+bool CIccUTF16String::FromUtf8(const char *szStr, size_t sizeSrc)
+{
+  if (!sizeSrc) sizeSrc = strlen(szStr);
+  if (sizeSrc) {
+    size_t nAlloc = AllocSize(sizeSrc * 2);
+    if (m_alloc <= nAlloc) {
+      m_str = (icUInt16Number*)icRealloc(m_str, nAlloc * sizeof(icUInt16Number));
+      m_alloc = nAlloc;
+    }
+    if (m_str) {
+      memset(m_str, 0, m_alloc * sizeof(icUInt16Number));
+      UTF16 *szDest = m_str;
+      icConvertUTF8toUTF16((const UTF8**)&szStr, (const UTF8*)&szStr[sizeSrc], &szDest, &szDest[m_alloc], lenientConversion);
+      if (m_str[0] == 0xfeff) {
+        size_t i;
+        for (i = 1; m_str[i]; i++) m_str[i-1] = m_str[i];
+        m_str[i-1] = 0;
+      }
+      m_len = WStrlen(m_str);
+    } else {
+      m_len = 0;
+      return false;
+    }
+  } else {
+    m_len = 0;
+    m_str[0] = 0;
+  }
+  return true;
+}
+
+const char *CIccUTF16String::ToUtf8(std::string &buf)
+{
+  return icUtf16ToUtf8(buf, m_str, (int)m_len);
+}
+
+const wchar_t *CIccUTF16String::ToWString(std::wstring &buf)
+{
+  buf.clear();
+  for (size_t i = 0; i < m_len; i++)
+    buf += (wchar_t)m_str[i];
+  return buf.c_str();
+}
+
+const char *icUtf16ToUtf8(std::string &buf, const icUInt16Number *szSrc, int sizeSrc)
+{
+  if (!sizeSrc)
+    sizeSrc = (int)CIccUTF16String::WStrlen(szSrc);
+  int n = sizeSrc * 4;
+  if (n) {
+    char *szBuf = (char*)malloc(n + 1);
+    char *szDest = szBuf;
+    icConvertUTF16toUTF8(&szSrc, &szSrc[sizeSrc], (UTF8**)&szDest, (UTF8*)&szDest[n + 1], lenientConversion);
+    *szDest = '\0';
+    buf = szBuf;
+    free(szBuf);
+  } else {
+    buf.clear();
+  }
+  return buf.c_str();
+}
+
+const unsigned short *icUtf8ToUtf16(CIccUTF16String &buf, const char *szSrc, int sizeSrc)
+{
+  buf.FromUtf8(szSrc, sizeSrc);
+  return buf.c_str();
+}
+
+// ---------------------------------------------------------------------------
+// Date/time and rendering intent string parsing
+// ---------------------------------------------------------------------------
+
+icDateTimeNumber icGetDateTimeValue(const icChar *str)
+{
+  unsigned int day=0, month=0, year=0, hours=0, minutes=0, seconds=0;
+  icDateTimeNumber dateTime = {};
+
+  if (!stricmp(str, "now")) {
+    time_t rawtime;
+    struct tm *timeinfo;
+    time(&rawtime);
+    timeinfo = localtime(&rawtime);
+    year    = timeinfo->tm_year + 1900;
+    month   = timeinfo->tm_mon  + 1;
+    day     = timeinfo->tm_mday;
+    hours   = timeinfo->tm_hour;
+    minutes = timeinfo->tm_min;
+    seconds = timeinfo->tm_sec;
+  } else {
+    sscanf(str, "%d-%02d-%02dT%02d:%02d:%02d", &year, &month, &day, &hours, &minutes, &seconds);
+  }
+  dateTime.year    = year;
+  dateTime.month   = month;
+  dateTime.day     = day;
+  dateTime.hours   = hours;
+  dateTime.minutes = minutes;
+  dateTime.seconds = seconds;
+  return dateTime;
+}
+
+icRenderingIntent icGetRenderingIntentValue(const icChar *szRenderingIntent)
+{
+  if (!strcmp(szRenderingIntent, "Perceptual"))
+    return icPerceptual;
+  if (!strcmp(szRenderingIntent, "Media-relative colorimetric") ||
+      !strcmp(szRenderingIntent, "Relative") ||
+      !strcmp(szRenderingIntent, "Relative Colorimetric"))
+    return icRelativeColorimetric;
+  if (!strcmp(szRenderingIntent, "Saturation"))
+    return icSaturation;
+  if (!strcmp(szRenderingIntent, "ICC-absolute colorimetric") ||
+      !strcmp(szRenderingIntent, "Absolute") ||
+      !strcmp(szRenderingIntent, "Absolute Colorimetric"))
+    return icAbsoluteColorimetric;
+  return icPerceptual;
+}
+
+icStandardObserver icGetNamedStandardObserverValue(const icChar *str)
+{
+  if (!strcmp(str, "Unknown observer") ||
+      !strcmp(str, "Unknown Observer"))
+    return icStdObsUnknown;
+  if (!strcmp(str, "CIE 1931 (two degree) standard observer") ||
+      !strcmp(str, "CIE 1931 standard colorimetric observer"))
+    return icStdObs1931TwoDegrees;
+  if (!strcmp(str, "CIE 1964 (ten degree) standard observer") ||
+      !strcmp(str, "CIE 1964 standard colorimetric observer"))
+    return icStdObs1964TenDegrees;
+  return icStdObsCustom;
+}
+
+icIlluminant icGetIlluminantValue(const icChar *str)
+{
+  if (!strcmp(str, "Illuminant Unknown"))                                         return icIlluminantUnknown;
+  if (!strcmp(str, "Illuminant D50")  || !strcmp(str, "D50"))                    return icIlluminantD50;
+  if (!strcmp(str, "Illuminant D65")  || !strcmp(str, "D65"))                    return icIlluminantD65;
+  if (!strcmp(str, "Illuminant D93")  || !strcmp(str, "D93"))                    return icIlluminantD93;
+  if (!strcmp(str, "Illuminant F2")   || !strcmp(str, "F2"))                     return icIlluminantF2;
+  if (!strcmp(str, "Illuminant D55")  || !strcmp(str, "D55"))                    return icIlluminantD55;
+  if (!strcmp(str, "Illuminant A")    || !strcmp(str, "A"))                      return icIlluminantA;
+  if (!strcmp(str, "Illuminant EquiPowerE") || !strcmp(str, "Illuminant E") || !strcmp(str, "E")) return icIlluminantEquiPowerE;
+  if (!strcmp(str, "Illuminant F8")   || !strcmp(str, "F8"))                     return icIlluminantF8;
+  if (!strcmp(str, "Illuminant Black Body") || !strcmp(str, "Black Body"))       return icIlluminantBlackBody;
+  if (!strcmp(str, "Illuminant Daylight")   || !strcmp(str, "Daylight"))         return icIlluminantDaylight;
+  if (!strcmp(str, "Illuminant B")    || !strcmp(str, "B"))                      return icIlluminantB;
+  if (!strcmp(str, "Illuminant C")    || !strcmp(str, "C"))                      return icIlluminantC;
+  if (!strcmp(str, "Illuminant F1")   || !strcmp(str, "F1"))                     return icIlluminantF1;
+  if (!strcmp(str, "Illuminant F3")   || !strcmp(str, "F3"))                     return icIlluminantF3;
+  if (!strcmp(str, "Illuminant F4")   || !strcmp(str, "F4"))                     return icIlluminantF4;
+  if (!strcmp(str, "Illuminant F5")   || !strcmp(str, "F5"))                     return icIlluminantF5;
+  if (!strcmp(str, "Illuminant F6")   || !strcmp(str, "F6"))                     return icIlluminantF6;
+  if (!strcmp(str, "Illuminant F7")   || !strcmp(str, "F7"))                     return icIlluminantF7;
+  if (!strcmp(str, "Illuminant F9")   || !strcmp(str, "F9"))                     return icIlluminantF9;
+  if (!strcmp(str, "Illuminant F10")  || !strcmp(str, "F10"))                    return icIlluminantF10;
+  if (!strcmp(str, "Illuminant F11")  || !strcmp(str, "F11"))                    return icIlluminantF11;
+  if (!strcmp(str, "Illuminant F12")  || !strcmp(str, "F12"))                    return icIlluminantF12;
+  return icIlluminantCustom;
+}
+
+icMeasurementUnitSig icGetMeasurementValue(const icChar *str)
+{
+  if (!strcmp(str, "Status A"))                                       return icSigStatusA;
+  if (!strcmp(str, "Status E"))                                       return icSigStatusE;
+  if (!strcmp(str, "Status I"))                                       return icSigStatusI;
+  if (!strcmp(str, "Status T"))                                       return icSigStatusT;
+  if (!strcmp(str, "Status M"))                                       return icSigStatusM;
+  if (!strcmp(str, "DIN with no polarizing filter"))                  return icSigDN;
+  if (!strcmp(str, "DIN with polarizing filter"))                     return icSigDNP;
+  if (!strcmp(str, "Narrow band DIN with no polarizing filter"))      return icSigDNN;
+  if (!strcmp(str, "Narrow band DIN with polarizing filter"))         return icSigDNNP;
+  return icSigStatusA;
 }
 
 #ifdef USEICCDEVNAMESPACE

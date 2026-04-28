@@ -158,7 +158,7 @@ int main(int argc, char* argv[]) {
     char filename[ max_path_length ];
     
     int channelNum = i*step + start;
-    snprintf(filename, max_path_length, argv[4], channelNum);
+    snprintf(filename, max_path_length, "%s%d", argv[4], channelNum);
     if (!infile[i].Open(filename)) {
       printf("Cannot open input %s\n", filename);
       return -1;
@@ -204,8 +204,9 @@ int main(int argc, char* argv[]) {
   long bytesPerSample = f->GetBitsPerSample()/8;
   
   // use unique_ptr to automatically free the buffers
-  std::unique_ptr<icUInt8Number> inbufffer( new icUInt8Number[ bytePerLine*nSamples ] );
-  std::unique_ptr<icUInt8Number> outbuffer( new icUInt8Number[ f->GetWidth() * bytesPerSample * nSamples ] );
+  std::unique_ptr<icUInt8Number[]> inbufffer( new icUInt8Number[ bytePerLine*nSamples ] );
+  size_t outSize = f->GetWidth() * bytesPerSample * nSamples;
+  std::unique_ptr<icUInt8Number[]> outbuffer( new icUInt8Number[ outSize ] );
   icUInt8Number *inbuf = inbufffer.get();
   icUInt8Number *outbuf = outbuffer.get();
 
@@ -225,7 +226,7 @@ int main(int argc, char* argv[]) {
   }
 
   // profile pointer lifetime needs to last until output file is written!
-  std::unique_ptr<unsigned char> destProfile;
+  std::unique_ptr<unsigned char[]> destProfile;
   if (argc>8) {
     CIccFileIO io;
     if (io.Open(argv[8], "rb")) {

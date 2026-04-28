@@ -959,7 +959,7 @@ CIccXform *CIccXform::Create(CIccProfile *pProfile,
     case icXformLutBRDFMcsParam:
     {
       CIccTag *pTag = NULL;
-      if (pProfile->m_Header.deviceClass == icSigMaterialVisualizationClass) {
+      if (pProfile->m_Header.deviceClass == icSigMultiplexVisualizationClass) {
         bInput = true;
         nMCS = icFromMCS;
 
@@ -1045,13 +1045,14 @@ CIccXform *CIccXform::Create(CIccProfile *pProfile,
     case icXformLutMCS:
       {
         CIccTag *pTag = NULL;
-        if (pProfile->m_Header.deviceClass==icSigMaterialIdentificationClass ||
+        if (pProfile->m_Header.deviceClass==icSigMultiplexIdentificationClass ||
             pProfile->m_Header.deviceClass==icSigInputClass) {
           bInput = true;
           nMCS = icToMCS;
           pTag = pProfile->FindTag(icSigAToM0Tag);
         }
-        else if (pProfile->m_Header.deviceClass==icSigMaterialVisualizationClass) {
+        else if (pProfile->m_Header.deviceClass==icSigMultiplexVisualizationClass || 
+                 pProfile->m_Header.deviceClass==icSigOutputClass) {
           bInput = true;
           nMCS = icFromMCS;
 
@@ -1123,7 +1124,7 @@ CIccXform *CIccXform::Create(CIccProfile *pProfile,
           if (pTag && !pTag->IsSupported())
             pTag = NULL;
         }
-        else if (pProfile->m_Header.deviceClass==icSigMaterialLinkClass) {
+        else if (pProfile->m_Header.deviceClass==icSigMultiplexLinkClass) {
           bInput = false;
           nMCS = icFromMCS;
           pTag = pProfile->FindTag(icSigMToA0Tag);
@@ -1958,8 +1959,8 @@ icStatusCMM CIccPcsXform::Connect(CIccXform *pFromXform, CIccXform *pToXform)
     if (!pFromProfile || !pToProfile) {
       return icCmmStatBadSpaceLink;
     }
-    CIccTagArray *pFromChannels = (CIccTagArray*)(pFromProfile->FindTagOfType(icSigMaterialTypeArrayTag, icSigTagArrayType));
-    CIccTagArray *pToChannels = (CIccTagArray*)(pToProfile->FindTagOfType(icSigMaterialTypeArrayTag, icSigTagArrayType));
+    CIccTagArray *pFromChannels = (CIccTagArray*)(pFromProfile->FindTagOfType(icSigMultiplexTypeArrayTag, icSigTagArrayType));
+    CIccTagArray *pToChannels = (CIccTagArray*)(pToProfile->FindTagOfType(icSigMultiplexTypeArrayTag, icSigTagArrayType));
 
     if (!pFromChannels || !pToChannels) {
       return icCmmStatBadSpaceLink;
@@ -2004,7 +2005,7 @@ icStatusCMM CIccPcsXform::Connect(CIccXform *pFromXform, CIccXform *pToXform)
           return icCmmStatBadMCSLink;
       }
     }
-    CIccTag *pTag = pToProfile->FindTag(icSigMaterialDefaultValuesTag);
+    CIccTag *pTag = pToProfile->FindTag(icSigMultiplexDefaultValuesTag);
     CIccTagNumArray *pDefaults = NULL;
     if (pTag && pTag->IsNumArrayType()) {
       pDefaults = (CIccTagNumArray *)pTag;
@@ -2897,7 +2898,7 @@ void CIccPcsXform::pushScale(icUInt16Number n, const icFloatNumber *vals)
 void CIccPcsXform::pushMatrix(icUInt16Number nRows, icUInt16Number nCols, const icFloatNumber *vals)
 {
   CIccPcsStepMatrix *mtx = new CIccPcsStepMatrix(nRows, nCols);
-  memcpy(mtx->entry(0), vals, nRows*nCols*sizeof(icFloatNumber));
+  memcpy(mtx->entry(0), vals, (size_t)nRows*nCols*sizeof(icFloatNumber));
 
   CIccPcsStepPtr ptr;
   ptr.ptr = mtx;
@@ -4782,7 +4783,7 @@ CIccPcsStepSrcMatrix::CIccPcsStepSrcMatrix(icUInt16Number nRows, icUInt16Number 
 CIccPcsStepSrcMatrix::~CIccPcsStepSrcMatrix()
 {
   if (m_vals)
-    delete m_vals;
+    delete[] m_vals;
 }
 
 
@@ -6512,7 +6513,7 @@ CIccApplyXform* CIccXformNDLut::GetNewApply(icStatusCMM& status)
   CIccCLUT* pCLUT = m_pTag->GetCLUT();
   CIccApplyCLUT* pApply = NULL;
 
-  if (pCLUT && m_nNumInput > 6) {
+  if (pCLUT) {      // was && m_nNumInput > 6, but this gets called for 1,2,5,6 as well, and withput pApply, it crashes
     pApply = pCLUT->GetNewApply();
     if (!pApply) {
       status = icCmmStatAllocErr;
@@ -6744,10 +6745,10 @@ CIccXformNamedColor::CIccXformNamedColor(CIccTag *pTag, icColorSpaceSignature cs
 {
   m_nApplyInterface = icApplyPixel2Pixel; // was uninitialized
   m_pTag = NULL;
+  m_pArray = NULL;
   if (pTag) {
     if (pTag->GetType()==icSigNamedColor2Type) {
       m_pTag = (CIccTagNamedColor2*)pTag;
-      m_pArray = NULL;
 
       m_pTag->SetColorSpaces(csPcs, csDevice);
     }
@@ -6756,7 +6757,6 @@ CIccXformNamedColor::CIccXformNamedColor(CIccTag *pTag, icColorSpaceSignature cs
       CIccArrayNamedColor *pNamed = (CIccArrayNamedColor*)pArray->GetArrayHandler();
 
       if (pNamed) {
-        m_pTag = NULL;
         m_pArray = pNamed;
         pNamed->SetColorSpaces(csPcs, csDevice, csSpectralPcs, pSpectralRange, pBiSpectralRange);
       }
@@ -6765,7 +6765,6 @@ CIccXformNamedColor::CIccXformNamedColor(CIccTag *pTag, icColorSpaceSignature cs
 
   m_nSrcSpace = icSigUnknownData;
   m_nDestSpace = icSigUnknownData;
-  m_pArray = NULL;
 }
 
 
@@ -7503,8 +7502,15 @@ void CIccXformMpe::SetAppliedCC(IIccProfileConnectionConditions *pPCC)
           m_bDeleteAppliedPCC = false;
         }
         else {
-          m_pAppliedPCC = new CIccCombinedConnectionConditions(m_pProfile, pPCC, bReflectance);
-          m_bDeleteAppliedPCC = true;
+          // check first, because we really shouldn't fail in a constructor
+          auto *pView = pPCC->getPccViewingConditions();
+          if (pView) {
+            m_pAppliedPCC = new CIccCombinedConnectionConditions(m_pProfile, pPCC, bReflectance);
+            m_bDeleteAppliedPCC = true;
+          } else {
+            m_pAppliedPCC = pPCC;
+            m_bDeleteAppliedPCC = false;
+          }
         }
       }
       else {
@@ -8075,9 +8081,13 @@ icStatusCMM CIccCmm::AddXform(const icChar *szProfilePath,
   if (!pProfile) 
     return icCmmStatCantOpenProfile;
 
+  // CFL-078: Save deviceClass before AddXform — CIccXform::Create() deletes
+  // cenc profiles internally (line 546), so caller must NOT double-delete.
+  icProfileClassSignature savedClass = pProfile->m_Header.deviceClass;
+
   icStatusCMM rv = AddXform(pProfile, nIntent, nInterp, pPcc, nLutType, bUseD2BxB2DxTags, pHintManager);
 
-  if (rv != icCmmStatOk)
+  if (rv != icCmmStatOk && savedClass != icSigColorEncodingClass)
     delete pProfile;
 
   return rv;
@@ -8131,9 +8141,12 @@ icStatusCMM CIccCmm::AddXform(icUInt8Number *pProfileMem,
     return icCmmStatCantOpenProfile;
   }
 
+  // CFL-078: Save deviceClass before AddXform — cenc ownership transfer
+  icProfileClassSignature savedClass = pProfile->m_Header.deviceClass;
+
   icStatusCMM rv = AddXform(pProfile, nIntent, nInterp, pPcc, nLutType, bUseD2BxB2DxTags, pHintManager);
 
-  if (rv != icCmmStatOk)
+  if (rv != icCmmStatOk && savedClass != icSigColorEncodingClass)
     delete pProfile;
 
   return rv;
@@ -8174,9 +8187,9 @@ icStatusCMM CIccCmm::AddXform(CIccProfile *pProfile,
     return icCmmStatInvalidProfile;
 
   switch(pProfile->m_Header.deviceClass) {
-    case icSigMaterialIdentificationClass:
-    case icSigMaterialVisualizationClass:
-    case icSigMaterialLinkClass:
+    case icSigMultiplexIdentificationClass:
+    case icSigMultiplexVisualizationClass:
+    case icSigMultiplexLinkClass:
       nIntent = icPerceptual;
       nLutType = icXformLutMCS;
       break;
@@ -8276,11 +8289,18 @@ icStatusCMM CIccCmm::AddXform(CIccProfile *pProfile,
             CIccXform *pNew = CIccXform::Create(pPrev->GetProfilePtr(), pPrev->IsInput(), pPrev->GetIntent(), pPrev->GetInterp(),
                                                 pPrev->GetConnectionConditions(), icXformLutMCS, bUseD2BxB2DxTags, pHintManager);
 
-            if (pNew) {
-              pPrev->DetachAll();
-              delete pPrev;
+            if (!pNew) {
+              // Create failed (e.g., previous profile has no MCS-
+              // suitable A2B / D2B tag, or factory was stripped).
+              // Do NOT overwrite prev->ptr with NULL — that would
+              // leave the list with a NULL xform that the next Apply
+              // dereferences → SIGSEGV. Leave pPrev in place and
+              // surface a clean error status.
+              return icCmmStatBadMCSLink;
             }
 
+            pPrev->DetachAll();
+            delete pPrev;
             prev->ptr = pNew;
 
           }
@@ -8290,7 +8310,8 @@ icStatusCMM CIccCmm::AddXform(CIccProfile *pProfile,
         }
 
         nSrcSpace = (icColorSpaceSignature)pProfile->m_Header.mcs;
-        if (pProfile->m_Header.deviceClass==icSigMaterialVisualizationClass) {
+        if (pProfile->m_Header.deviceClass==icSigMultiplexVisualizationClass ||
+            pProfile->m_Header.deviceClass==icSigOutputClass) {
           if (bUseD2BxB2DxTags && pProfile->m_Header.spectralPCS) {
             nDstSpace = (icColorSpaceSignature)pProfile->m_Header.spectralPCS;
           }
@@ -8298,7 +8319,7 @@ icStatusCMM CIccCmm::AddXform(CIccProfile *pProfile,
             nDstSpace = pProfile->m_Header.pcs;
           }
         }
-        else if (pProfile->m_Header.deviceClass==icSigMaterialLinkClass) {
+        else if (pProfile->m_Header.deviceClass==icSigMultiplexLinkClass) {
           nDstSpace = pProfile->m_Header.colorSpace;
           nParentSpace = pProfile->GetParentColorSpace();
         }
@@ -8343,7 +8364,7 @@ icStatusCMM CIccCmm::AddXform(CIccProfile *pProfile,
   }
 
   // this must check before creating the Xform, because that can delete the profile
-  if (pProfile->m_Header.deviceClass == icSigMaterialVisualizationClass) {
+  if (pProfile->m_Header.deviceClass == icSigMultiplexVisualizationClass) {
     bInput = true;
   }
 
@@ -8353,6 +8374,10 @@ icStatusCMM CIccCmm::AddXform(CIccProfile *pProfile,
 
   if (!Xform.ptr) {
     return icCmmStatBadXform;
+  }
+
+  if (Xform.ptr->IsMCS() && Xform.ptr->IsInput()) {
+    bInput = true;
   }
 
   m_nLastSpace = nDstSpace;
@@ -8399,9 +8424,9 @@ icStatusCMM CIccCmm::AddXform(CIccProfile *pProfile,
     return icCmmStatInvalidProfile;
 
   switch (pProfile->m_Header.deviceClass) {
-  case icSigMaterialIdentificationClass:
-  case icSigMaterialVisualizationClass:
-  case icSigMaterialLinkClass:
+  case icSigMultiplexIdentificationClass:
+  case icSigMultiplexVisualizationClass:
+  case icSigMultiplexLinkClass:
     return icCmmStatBadLutType;
 
   default:
@@ -8516,18 +8541,28 @@ icStatusCMM CIccCmm::AddXform(CIccProfile &Profile,
 {
   CIccProfile *pProfile = new CIccProfile(Profile);
 
+  // CFL-045: Guard against null PCS causing vptr corruption in copy (CWE-843)
+  if (pProfile && (icUInt32Number)pProfile->m_Header.pcs == 0 && (icUInt32Number)pProfile->m_Header.spectralPCS == 0) {
+    delete pProfile;
+    return icCmmStatInvalidProfile;
+  }
+
   if (!pProfile) 
     return icCmmStatAllocErr;
 
   //borrow the caller's AttachIO to perform the AddXform
   pProfile->CopyAttach(&Profile);
 
+  // CFL-078: Save deviceClass before AddXform — cenc ownership transfer
+  icProfileClassSignature savedClass = pProfile->m_Header.deviceClass;
+
   icStatusCMM stat = AddXform(pProfile, nIntent, nInterp, pPcc, nLutType, bUseD2BxB2DxTags, pHintManager);
 
   //Now that we have added the xform disconnect from the callers AttachIO
-  pProfile->CopyAttach(nullptr);
+  if (savedClass != icSigColorEncodingClass)
+    pProfile->CopyAttach(nullptr);
 
-  if (stat != icCmmStatOk)
+  if (stat != icCmmStatOk && savedClass != icSigColorEncodingClass)
     delete pProfile;
 
   return stat;
@@ -9884,6 +9919,7 @@ icStatusCMM CIccApplyNamedColorCmm::Apply(icFloatNumber *DstPixel, const icFloat
 
       pApply = i->ptr;
       pApplyXform = pApply->GetXform();
+      if (!pApplyXform) return icCmmStatIncorrectApply;
       if (pApplyXform->GetXformType()==icXformTypeNamedColor) {
         pXform = (CIccXformNamedColor*)pApplyXform;
 
@@ -9937,6 +9973,7 @@ icStatusCMM CIccApplyNamedColorCmm::Apply(icFloatNumber *DstPixel, const icFloat
 
     pApply = i->ptr;
     pApplyXform = pApply->GetXform();
+    if (!pApplyXform) return icCmmStatIncorrectApply;
     if (pApplyXform->GetXformType()==icXformTypeNamedColor) {
       pXform = (CIccXformNamedColor*)pApplyXform;
 
@@ -9978,6 +10015,7 @@ icStatusCMM CIccApplyNamedColorCmm::Apply(icFloatNumber *DstPixel, const icFloat
 
     pApply = i->ptr;
     pApplyXform = pApply->GetXform();
+    if (!pApplyXform) return icCmmStatIncorrectApply;
     if (pApplyXform->GetXformType()==icXformTypeNamedColor) {
       return icCmmStatIncorrectApply;
     }
@@ -10040,6 +10078,7 @@ icStatusCMM CIccApplyNamedColorCmm::Apply(icFloatNumber *DstPixel, const icFloat
 
         pApply = i->ptr;
         pApplyXform = pApply->GetXform();
+        if (!pApplyXform) return icCmmStatIncorrectApply;
         if (pApplyXform->GetXformType()==icXformTypeNamedColor) {
           pXform = (CIccXformNamedColor*)pApplyXform;
 
@@ -10076,6 +10115,7 @@ icStatusCMM CIccApplyNamedColorCmm::Apply(icFloatNumber *DstPixel, const icFloat
 
       pApply = i->ptr;
       pApplyXform = pApply->GetXform();
+      if (!pApplyXform) return icCmmStatIncorrectApply;
       if (pApplyXform->GetXformType()==icXformTypeNamedColor) {
         pXform = (CIccXformNamedColor*)pApplyXform;
 
@@ -10108,6 +10148,7 @@ icStatusCMM CIccApplyNamedColorCmm::Apply(icFloatNumber *DstPixel, const icFloat
 
       pApply = i->ptr;
       pApplyXform = pApply->GetXform();
+      if (!pApplyXform) return icCmmStatIncorrectApply;
       if (pApplyXform->GetXformType()==icXformTypeNamedColor) {
         return icCmmStatIncorrectApply;
       }
@@ -10163,6 +10204,7 @@ icStatusCMM CIccApplyNamedColorCmm::Apply(icChar* DstColorName, const icFloatNum
 
       pApply = i->ptr;
       pApplyXform = pApply->GetXform();
+      if (!pApplyXform) return icCmmStatIncorrectApply;
       if (pApplyXform->GetXformType()==icXformTypeNamedColor) {
         pXform = (CIccXformNamedColor*)pApplyXform;
         switch(pXform->GetInterface()) {
@@ -10201,6 +10243,7 @@ icStatusCMM CIccApplyNamedColorCmm::Apply(icChar* DstColorName, const icFloatNum
 
     pApply = i->ptr;
     pApplyXform = pApply->GetXform();
+    if (!pApplyXform) return icCmmStatIncorrectApply;
     if (pApplyXform->GetXformType()==icXformTypeNamedColor) {
       pXform = (CIccXformNamedColor*)pApplyXform;
       switch(pXform->GetInterface()) {
@@ -10225,6 +10268,7 @@ icStatusCMM CIccApplyNamedColorCmm::Apply(icChar* DstColorName, const icFloatNum
     i = m_Xforms->begin();
     pApply = i->ptr;
     pApplyXform = pApply->GetXform();
+    if (!pApplyXform) return icCmmStatIncorrectApply;
     if (pApplyXform->GetXformType()!=icXformTypeNamedColor) {
       return icCmmStatIncorrectApply;
     }
@@ -10272,6 +10316,7 @@ icStatusCMM CIccApplyNamedColorCmm::Apply(icFloatNumber *DstPixel, const icChar 
   i=m_Xforms->begin();
   pApply = i->ptr;
   pApplyXform = pApply->GetXform();
+  if (!pApplyXform) return icCmmStatIncorrectApply;
   if (pApplyXform->GetXformType()!=icXformTypeNamedColor)
     return icCmmStatIncorrectApply;
 
@@ -10292,6 +10337,7 @@ icStatusCMM CIccApplyNamedColorCmm::Apply(icFloatNumber *DstPixel, const icChar 
 
       pApply = i->ptr;
       pApplyXform = pApply->GetXform();
+      if (!pApplyXform) return icCmmStatIncorrectApply;
       if (pApplyXform->GetXformType()==icXformTypeNamedColor) {
         CIccXformNamedColor *pXformLocal = (CIccXformNamedColor*)pApplyXform;
         switch(pXformLocal->GetInterface()) {
@@ -10324,6 +10370,7 @@ icStatusCMM CIccApplyNamedColorCmm::Apply(icFloatNumber *DstPixel, const icChar 
 
     pApply = i->ptr;
     pApplyXform = pApply->GetXform();
+    if (!pApplyXform) return icCmmStatIncorrectApply;
     if (pApplyXform->GetXformType()==icXformTypeNamedColor) {
       pXform = (CIccXformNamedColor*)pApplyXform;
       switch(pXform->GetInterface()) {
@@ -10396,6 +10443,7 @@ icStatusCMM CIccApplyNamedColorCmm::Apply(icChar *DstColorName, const icChar *Sr
 
   pApply = i->ptr;
   pApplyXform = pApply->GetXform();
+  if (!pApplyXform) return icCmmStatIncorrectApply;
   if (pApplyXform->GetXformType()!=icXformTypeNamedColor)
     return icCmmStatIncorrectApply;
 
@@ -10417,6 +10465,7 @@ icStatusCMM CIccApplyNamedColorCmm::Apply(icChar *DstColorName, const icChar *Sr
 
       pApply = i->ptr;
       pApplyXform = pApply->GetXform();
+      if (!pApplyXform) return icCmmStatIncorrectApply;
       if (pApplyXform->GetXformType()==icXformTypeNamedColor) {
         pXform = (CIccXformNamedColor*)pApplyXform;
         switch(pXform->GetInterface()) {
@@ -10450,6 +10499,7 @@ icStatusCMM CIccApplyNamedColorCmm::Apply(icChar *DstColorName, const icChar *Sr
 
     pApply = i->ptr;
     pApplyXform = pApply->GetXform();
+    if (!pApplyXform) return icCmmStatIncorrectApply;
     if (pApplyXform->GetXformType()==icXformTypeNamedColor) {
       pXform = (CIccXformNamedColor*)pApplyXform;
       switch(pXform->GetInterface()) {
@@ -10539,9 +10589,12 @@ icStatusCMM CIccNamedColorCmm::AddXform(const icChar *szProfilePath,
   if (!pProfile) 
     return icCmmStatCantOpenProfile;
 
+  // CFL-078: Save deviceClass before AddXform — cenc ownership transfer (CWE-416)
+  icProfileClassSignature savedClass = pProfile->m_Header.deviceClass;
+
   icStatusCMM rv = AddXform(pProfile, nIntent, nInterp, pPcc, nLutType, bUseD2BxB2DxTags, pHintManager);
 
-  if (rv != icCmmStatOk)
+  if (rv != icCmmStatOk && savedClass != icSigColorEncodingClass)
     delete pProfile;
 
   return rv;
@@ -10580,13 +10633,13 @@ icStatusCMM CIccNamedColorCmm::AddXform(CIccProfile *pProfile,
   icXformLutType nUseLutType = nLutType;
 
   switch(pProfile->m_Header.deviceClass) {
-    case icSigMaterialIdentificationClass:
-    case icSigMaterialLinkClass:
+    case icSigMultiplexIdentificationClass:
+    case icSigMultiplexLinkClass:
       nIntent = icPerceptual;
       nLutType = icXformLutMCS;
       break;
 
-    case icSigMaterialVisualizationClass:
+    case icSigMultiplexVisualizationClass:
       nLutType = icXformLutMCS;
       break;
 
@@ -10725,11 +10778,11 @@ icStatusCMM CIccNamedColorCmm::AddXform(CIccProfile *pProfile,
       switch(pProfile->m_Header.deviceClass)
       {
         case icSigInputClass:
-        case icSigMaterialIdentificationClass:
+        case icSigMultiplexIdentificationClass:
           nSrcSpace = pProfile->m_Header.colorSpace;
           nDstSpace = (icColorSpaceSignature)pProfile->m_Header.mcs;
           break;
-        case icSigMaterialVisualizationClass:
+        case icSigMultiplexVisualizationClass:
           nSrcSpace = (icColorSpaceSignature)pProfile->m_Header.mcs;
           if (bUseD2BxB2DxTags && pProfile->m_Header.spectralPCS) {
             nDstSpace = (icColorSpaceSignature)pProfile->m_Header.spectralPCS;
@@ -10740,7 +10793,7 @@ icStatusCMM CIccNamedColorCmm::AddXform(CIccProfile *pProfile,
           bInput = true;
           break;
 
-        case icSigMaterialLinkClass:
+        case icSigMultiplexLinkClass:
           nSrcSpace = (icColorSpaceSignature)pProfile->m_Header.mcs;
           nDstSpace = pProfile->m_Header.colorSpace;
           break;
@@ -11161,7 +11214,7 @@ bool CIccMruCache<T>::Init(icUInt16Number nSrcSamples, icUInt16Number nDstSample
   if (!m_cache)
     return false;
 
-  m_pixelData = (T*)malloc((int)nCacheSize * m_nTotalSamples * sizeof(T));
+  m_pixelData = (T*)malloc((size_t)nCacheSize * m_nTotalSamples * sizeof(T));
 
   if (!m_pixelData)
     return false;
@@ -11235,8 +11288,11 @@ bool CIccMruCache<T>::Apply(T *DstPixel, const T *SrcPixel)
     if (prev)
       prev->pNext = NULL;
 
-    // Static analysis gets a false positive here, because it doesn't understand the relation between count and pointers in the list
-    // assert avoids the static analysis warning, and should never fire
+    // Static analysis false positive: last is never NULL here because
+    // m_nCacheSize >= 1 guarantees at least one loop iteration sets last = ptr
+    assert( last != NULL );
+    if (!last)
+      return false;
     assert( m_pFirst != NULL );
     last->pNext = m_pFirst;
 

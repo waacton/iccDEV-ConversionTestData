@@ -471,7 +471,7 @@ bool CIccProfileXml::ParseBasic(xmlNode *pNode, std::string &parseStr)
 
       attr = icXmlFindAttr(pNode, "VendorFlags");
       if (attr) {
-        icUInt32Number vendor;
+        icUInt32Number vendor = 0;
         sscanf(icXmlAttrValue(attr), "%x", &vendor);
         m_Header.flags |= vendor;
       }
@@ -551,7 +551,7 @@ bool CIccProfileXml::ParseBasic(xmlNode *pNode, std::string &parseStr)
       }
     }
     else if (!icXmlStrCmp(pNode->name, "MCS")) {
-      m_Header.mcs = (icMaterialColorSignature)icXmlGetChildSigVal(pNode);
+      m_Header.mcs = (icMultiplexColorSignature)icXmlGetChildSigVal(pNode);
     }
     else if (!icXmlStrCmp(pNode->name, "ProfileDeviceSubClass")) {
       m_Header.deviceSubClass = (icProfileClassSignature)icXmlGetChildSigVal(pNode);
@@ -675,7 +675,7 @@ bool CIccProfileXml::ParseTag(xmlNode *pNode, std::string &parseStr)
       icTagTypeSignature sigType = icGetTypeNameTagSig((const icChar*)pTypeNode->name);
 
       if (sigType == icSigUnknownType) {
-        xmlAttr *attr = icXmlFindAttr(pTypeNode, "type");
+        attr = icXmlFindAttr(pTypeNode, "type");
         sigType = (icTagTypeSignature)icGetSigVal((icChar*)icXmlAttrValue(attr));
       }
 
@@ -712,7 +712,6 @@ bool CIccProfileXml::ParseTag(xmlNode *pNode, std::string &parseStr)
         }
       }
       else {
-        char str[100];
         parseStr += "Invalid tag extension for \"";
         parseStr += (const char*)pTypeNode->name;
         parseStr += "\" (";
@@ -729,7 +728,7 @@ bool CIccProfileXml::ParseTag(xmlNode *pNode, std::string &parseStr)
     icTagTypeSignature sigType = icGetTypeNameTagSig(nodeName.c_str());
 
     if (sigType == icSigUnknownType) {
-      xmlAttr *attr = icXmlFindAttr(pNode, "type");
+      attr = icXmlFindAttr(pNode, "type");
       sigType = (icTagTypeSignature)icGetSigVal((icChar*)icXmlAttrValue(attr));
     }
 
@@ -831,6 +830,7 @@ bool CIccProfileXml::ParseTag(xmlNode *pNode, std::string &parseStr)
         }
       }
     }
+    break;
   default:
       break;
   }
@@ -873,8 +873,16 @@ bool CIccProfileXml::LoadXml(const char *szFilename, const char *szRelaxNGDir, s
   xmlDoc *doc = NULL;
   xmlNode *root_element = NULL;
 
-  /*parse the file and get the DOM */
-  doc = xmlReadFile(szFilename, NULL, 0);
+  /* Parse the file and get the DOM.
+   *
+   * Drop XML_PARSE_HUGE: it disables libxml2's depth cap, name-length
+   * cap, text-length cap, and the billion-laughs entity-expansion guard
+   * — all of which protect against crafted inputs. Keep XML_PARSE_NONET
+   * (no network) and add XML_PARSE_NOENT (refuse entity substitution)
+   * and XML_PARSE_DTDLOAD=false (don't pull in external DTDs). ICC
+   * profiles never use DTD entities legitimately.
+   */
+  doc = xmlReadFile(szFilename, NULL, XML_PARSE_NONET | XML_PARSE_NOENT);
 
   if (doc == NULL) 
     return false;

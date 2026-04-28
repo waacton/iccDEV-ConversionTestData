@@ -9,7 +9,10 @@ CIccSparseMatrix::CIccSparseMatrix(void *pMatrix, size_t nSize, icSparseMatrixTy
   m_nType = nType;
   m_Data = NULL;
 
-  if (bInitFromData) {
+  // bInitFromData dereferences the first 4 bytes of pMatrix. Callers
+  // inside IccProfLib guarantee at least 4 bytes, but this ctor is
+  // public API — external callers might pass a short buffer.
+  if (bInitFromData && pMatrix && nSize >= 2*sizeof(icUInt16Number)) {
     icUInt16Number nRows = *((icUInt16Number*)pMatrix);
     icUInt16Number nCols = *((icUInt16Number*)(m_pMatrix+sizeof(icUInt16Number)));
     Init(nRows, nCols);
@@ -28,6 +31,7 @@ CIccSparseMatrix::CIccSparseMatrix(const CIccSparseMatrix &mtx)
   m_pMatrix = mtx.m_pMatrix;
   m_nRawSize = mtx.m_nRawSize;
   m_nType = mtx.m_nType;
+  m_Data = NULL;
 
   if (mtx.m_Data) {
     switch (m_nType) {
@@ -122,7 +126,8 @@ bool CIccSparseMatrix::Reset(void *pMatrix, size_t nSize, icSparseMatrixType nTy
   m_nType = nType;
   m_Data = NULL;
 
-  if (bInitFromData) {
+  // Same guard as the ctor: don't dereference short buffers.
+  if (bInitFromData && pMatrix && nSize >= 2*sizeof(icUInt16Number)) {
     icUInt16Number nRows = *((icUInt16Number*)pMatrix);
     icUInt16Number nCols = *((icUInt16Number*)(m_pMatrix+sizeof(icUInt16Number)));
     return Init(nRows, nCols);
@@ -227,7 +232,10 @@ bool CIccSparseMatrix::Copy(const CIccSparseMatrix &mtx)
   if (!Init(mtx.m_nRows, mtx.m_nCols))
     return false;
 
-  memcpy(m_RowStart, mtx.m_RowStart, (m_nRows+1)*sizeof(icUInt32Number));
+  // m_RowStart is a u16* pointing at (m_nRows+1) u16 slots; copying with
+  // sizeof(icUInt32Number) stomps 2× the allocated region (into the
+  // adjacent m_ColumnIndices tail).
+  memcpy(m_RowStart, mtx.m_RowStart, (m_nRows+1)*sizeof(icUInt16Number));
   icUInt32Number nEntries = m_RowStart[m_nRows];
   icUInt32Number i;
 
@@ -490,6 +498,13 @@ bool CIccSparseMatrix::IsValid()
   for (r=0; r<(int)m_nRows; r++) {
     if (m_RowStart[r]>m_RowStart[r+1])
       return false;
+
+    // Empty-row case: skip both the inner loop AND the post-loop
+    // column-range check. Otherwise `i` is either uninitialised on
+    // the first outer iteration (r=0) or stale from the previous
+    // iteration, and `m_ColumnIndices[i]` reads from a garbage offset.
+    if (m_RowStart[r+1] == m_RowStart[r])
+      continue;
 
     for (i=m_RowStart[r]; i<(int)m_RowStart[r+1]-1; i++) {
       if (m_ColumnIndices[i]>=m_ColumnIndices[i+1] || m_ColumnIndices[i]>m_nCols)

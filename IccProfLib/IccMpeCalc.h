@@ -84,8 +84,8 @@ namespace iccDEV {
 class CIccMpeCurveSet;
 class CIccMpeMatrix;
 class CIccMpeCLUT;
-class CIccMpeCalculator;
-class CIccApplyMpeCalculator;
+class ICCPROFLIB_API CIccMpeCalculator;
+class ICCPROFLIB_API CIccApplyMpeCalculator;
 class IIccOpDef;
 
 #define icMaxDataStackSize 65535
@@ -95,8 +95,13 @@ class IIccOpDef;
 /************************************************************************
  * Channel Function signature
  ************************************************************************/
-typedef enum {
+typedef enum : uint32_t {
+  icSigChannelNullDataOp            = 0x00000000,  /* not valid, used for data range */
+  
   icSigChannelFunction              = 0x66756e63,  /* 'func' */
+  
+  // useful value that is not defined by the spec.
+  icSigChannelRangeOp               = 0xffffffff,  /* not valid, used for data range */
 } icChannelFuncSignature;
 
 
@@ -353,7 +358,7 @@ protected:
   bool m_bUseRefs;
 };
 
-class CIccApplyMpeCalculator;
+class ICCPROFLIB_API CIccApplyMpeCalculator;
 
 /**
 ****************************************************************************
@@ -407,7 +412,7 @@ protected:
   void InsertBlanks(std::string &sDescription, int nBlanks);
   void DescribeSequence(std::string &sDescription,
                         icUInt32Number nOps, SIccCalcOp *op, int nBlanks);
-  bool ApplySequence(CIccApplyMpeCalculator *pApply, icUInt32Number nOps, SIccCalcOp *op) const;
+  bool ApplySequence(CIccApplyMpeCalculator *pApply, icUInt32Number nOps, SIccCalcOp *op, int nDepth = 0) const;
 
   const char *ParseFuncDef(const char *szFuncDef, CIccCalcOpList &m_list, std::string &sReport);
 
@@ -503,7 +508,7 @@ protected:
 * Purpose: The Calculator process element apply data
 *****************************************************************************
 */
-class CIccApplyMpeCalculator : public CIccApplyMpe
+class ICCPROFLIB_API CIccApplyMpeCalculator : public CIccApplyMpe
 {
   friend class CIccMpeCalculator;
 public:

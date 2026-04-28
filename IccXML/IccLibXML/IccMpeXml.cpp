@@ -65,8 +65,10 @@
 #include "IccMpeXml.h"
 #include "IccUtilXml.h"
 #include "IccIoXml.h"
+#include "IccXmlConfig.h"
 #include "IccCAM.h"
 
+#include <new>     /* std::nothrow */
 #include <cstring> /* C strings strcpy, memcpy ... */
 
 #ifdef WIN32
@@ -107,10 +109,24 @@ bool CIccMpeXmlUnknown::ToXml(std::string &xml, std::string blanks/* = ""*/)
 }
 
 
-bool CIccMpeXmlUnknown::ParseXml(xmlNode *pNode, std::string & /*parseStr*/)
+bool CIccMpeXmlUnknown::ParseXml(xmlNode *pNode, std::string &parseStr)
 {
-  SetType((icElemTypeSignature)icXmlStrToSig(icXmlAttrValue(pNode, "type")));
-  SetChannels(atoi(icXmlAttrValue(pNode, "InputChannels")), atoi(icXmlAttrValue(pNode, "OutputChannels")));
+  SetType((icElemTypeSignature)icXmlStrToSig(icXmlAttrValue(pNode, "Type")));
+
+  // Demonstration use of the range-checked parsers: InputChannels /
+  // OutputChannels are u16 in SetChannels. atoi + silent narrowing
+  // previously accepted "65537" as 1 or "-1" as 65535; icXmlParseU16
+  // refuses both.
+  icUInt16Number nIn = 0, nOut = 0;
+  if (!icXmlParseU16(icXmlAttrValue(pNode, "InputChannels"), nIn)) {
+    parseStr += "Invalid InputChannels attribute on Unknown MPE element\n";
+    return false;
+  }
+  if (!icXmlParseU16(icXmlAttrValue(pNode, "OutputChannels"), nOut)) {
+    parseStr += "Invalid OutputChannels attribute on Unknown MPE element\n";
+    return false;
+  }
+  SetChannels(nIn, nOut);
 
   if (pNode->children && pNode->children->type == XML_TEXT_NODE && pNode->children->content) {
     icUInt32Number nSize = icXmlGetHexDataSize((const char *)pNode->children->content);
@@ -206,7 +222,8 @@ bool CIccFormulaCurveSegmentXml::ParseXml(xmlNode *pNode, std::string &parseStr)
     return false;
   }
 
-  m_nReserved2 = atoi(icXmlAttrValue(pNode, "Reserved2"));
+  m_nReserved  = atoi(icXmlAttrValue(pNode, "Reserved",  "0"));
+  m_nReserved2 = atoi(icXmlAttrValue(pNode, "Reserved2", "0"));
   m_nFunctionType = atoi(icXmlAttrValue(funcType));
 
 
@@ -300,7 +317,7 @@ bool CIccSampledCurveSegmentXml::ParseXml(xmlNode *pNode, std::string &parseStr)
 
   // file exists
   if (filename[0]) {
-    CIccIO *file = IccOpenFileIO(filename, "rb");
+    CIccIO *file = IccXmlSafeOpenFileIO(filename, "rb");
     if (!file){
       parseStr += "Error! - File '";
       parseStr += filename;
@@ -313,27 +330,46 @@ bool CIccSampledCurveSegmentXml::ParseXml(xmlNode *pNode, std::string &parseStr)
 
     // format is text
     if (!strcmp(format, "text")) {
-      size_t num = file->GetLength();
-      char *buf = new char[num];
-
-      if (!buf) {          
-        perror("Memory Error");
+      icUInt32Number num;
+      if (!icXmlValidateFileCount(file->GetLength(), num, parseStr, filename)) {
+        delete file;
+        return false;
+      }
+      // Shared ceiling: prevents num+1 from wrapping size_t and caps
+      // downstream ParseTextArrayNum memory use. See IccUtilXml.h.
+      if (num > icXmlMaxTextFileBytes) {
         parseStr += "'";
         parseStr += filename;
-        parseStr += "' may not be a valid text file.\n";
+        parseStr += "' exceeds 256 MB limit.\n";
+        delete file;
+        return false;
+      }
+      // +1 and explicit NUL: ParseTextArrayNum eventually calls
+      // ParseText which scans until '\0'. Without a terminator
+      // it reads past the allocation into adjacent heap.
+      char *buf = new(std::nothrow) char[num + 1];
+
+      if (!buf) {
+        parseStr += "Out of memory allocating ";
+        parseStr += std::to_string(num + 1);
+        parseStr += " bytes for text buffer from '";
+        parseStr += filename;
+        parseStr += "'.\n";
         delete file;
         return false;
       }
 
-      if (file->Read8(buf, num) !=num) {
-        perror("Read-File Error");
-        parseStr += "'";
+      if (file->Read8(buf, num) != num) {
+        parseStr += "Read error: could not read ";
+        parseStr += std::to_string(num);
+        parseStr += " bytes from '";
         parseStr += filename;
-        parseStr += "' may not be a valid text file.\n";
+        parseStr += "'.\n";
         delete[] buf;
-        delete file;             
+        delete file;
         return false;
-      }   
+      }
+      buf[num] = '\0';  // NUL-terminate for ParseText downstream
 
       CIccFloatArray data;
 
@@ -378,10 +414,15 @@ bool CIccSampledCurveSegmentXml::ParseXml(xmlNode *pNode, std::string &parseStr)
       }
 
       if (storageType == icValueTypeUInt8){
-        size_t num = file->GetLength();
+        icUInt32Number num;
         icUInt8Number value;
 
-        SetSize((icUInt32Number)num);
+        if (!icXmlValidateFileCount(file->GetLength(), num, parseStr, filename)) {
+          delete file;
+          return false;
+        }
+
+        SetSize(num);
         icFloatNumber *dst =  m_pSamples;
         icUInt32Number i;
         for (i=0; i<num; i++) {
@@ -399,11 +440,16 @@ bool CIccSampledCurveSegmentXml::ParseXml(xmlNode *pNode, std::string &parseStr)
         return true;
       }        
       else if (storageType == icValueTypeUInt16){
-        size_t num = file->GetLength() / sizeof(icUInt16Number);
+        icUInt32Number num;
         icUInt16Number value;
         icUInt8Number *m_ptr = (icUInt8Number*)&value;
 
-        SetSize((icUInt32Number)num);
+        if (!icXmlValidateFileCount(file->GetLength() / sizeof(icUInt16Number), num, parseStr, filename)) {
+          delete file;
+          return false;
+        }
+
+        SetSize(num);
         icFloatNumber *dst = m_pSamples;
         icUInt32Number i;
         for (i=0; i<num; i++) {
@@ -430,11 +476,16 @@ bool CIccSampledCurveSegmentXml::ParseXml(xmlNode *pNode, std::string &parseStr)
         return true;
       }
       else if (storageType == icValueTypeFloat16){
-        size_t num = file->GetLength() / sizeof(icFloat16Number);
+        icUInt32Number num;
         icFloat16Number value;
         icUInt8Number *m_ptr = (icUInt8Number*)&value;
 
-        SetSize((icUInt32Number)num);
+        if (!icXmlValidateFileCount(file->GetLength() / sizeof(icFloat16Number), num, parseStr, filename)) {
+          delete file;
+          return false;
+        }
+
+        SetSize(num);
         icFloatNumber *dst = m_pSamples;
         icUInt32Number i;
         for (i=0; i<num; i++) {
@@ -461,11 +512,16 @@ bool CIccSampledCurveSegmentXml::ParseXml(xmlNode *pNode, std::string &parseStr)
         return true;
       }
       else if (storageType == icValueTypeFloat32) {
-        size_t num = file->GetLength()/sizeof(icFloat32Number);
+        icUInt32Number num;
         icFloat32Number value;
         icUInt8Number *m_ptr = (icUInt8Number*)&value;
 
-        SetSize((icUInt32Number)num);
+        if (!icXmlValidateFileCount(file->GetLength() / sizeof(icFloat32Number), num, parseStr, filename)) {
+          delete file;
+          return false;
+        }
+
+        SetSize(num);
         icFloatNumber *dst = m_pSamples;
 
         icUInt32Number i;
@@ -542,13 +598,18 @@ bool CIccSampledCalculatorCurveXml::ToXml(std::string &xml, std::string blanks)
   snprintf(line, lineSize, " ExtensionType=\"%u\"", m_extensionType);
   xml += line;
 
-  snprintf(line, lineSize, " DesiredSize=\"%u\">\n", m_nDesiredSize);
+  snprintf(line, lineSize, " DesiredSize=\"%u\"", m_nDesiredSize);
   xml += line;
 
-  if (m_nReserved2) {
-    snprintf(line, lineSize, " Reservered2=\"%u\">\n", m_nReserved2);
+  if (m_nReserved) {
+    snprintf(line, lineSize, " Reserved=\"%u\"", m_nReserved);
     xml += line;
   }
+  if (m_nReserved2) {
+    snprintf(line, lineSize, " Reserved2=\"%u\"", m_nReserved2);
+    xml += line;
+  }
+  xml += ">\n";
 
   if (m_pCalc && !strcmp(m_pCalc->GetClassName(), "CIccMpeXmlCalculator")) {
     CIccMpeXmlCalculator *pXmlCalc = (CIccMpeXmlCalculator*)m_pCalc;
@@ -593,6 +654,9 @@ bool CIccSampledCalculatorCurveXml::ParseXml(xmlNode *pNode, std::string &parseS
   }
 
   m_nDesiredSize = (icUInt32Number)atoi(icXmlAttrValue(attr));
+
+  m_nReserved  = (icUInt32Number)atoi(icXmlAttrValue(pNode, "Reserved",  "0"));
+  m_nReserved2 = (icUInt16Number)atoi(icXmlAttrValue(pNode, "Reserved2", "0"));
 
   xmlNode *pCalcNode = icXmlFindNode(pNode->children, "CalculatorElement");
   if (pCalcNode) {
@@ -639,8 +703,14 @@ bool CIccSingleSampledCurveXml::ToXml(std::string &xml, std::string blanks)
   snprintf(line, lineSize, " StorageType=\"%u\"", m_storageType);
   xml += line;
 
-  snprintf(line, lineSize, " ExtensionType=\"%u\">\n", m_extensionType);
+  snprintf(line, lineSize, " ExtensionType=\"%u\"", m_extensionType);
   xml += line;
+
+  if (m_nReserved) {
+    snprintf(line, lineSize, " Reserved=\"%u\"", m_nReserved);
+    xml += line;
+  }
+  xml += ">\n";
 
   CIccFloatArray::DumpArray(xml, blanks + "  ", m_pSamples, m_nCount, icConvertFloat, 8);
 
@@ -682,11 +752,13 @@ bool CIccSingleSampledCurveXml::ParseXml(xmlNode *pNode, std::string &parseStr)
     m_extensionType = (icUInt16Number)atoi(icXmlAttrValue(attr));
   }
 
+  m_nReserved = (icUInt32Number)atoi(icXmlAttrValue(pNode, "Reserved", "0"));
+
   const char *filename = icXmlAttrValue(pNode, "Filename");
 
   // file exists
   if (filename[0]) {
-    CIccIO *file = IccOpenFileIO(filename, "rb");
+    CIccIO *file = IccXmlSafeOpenFileIO(filename, "rb");
     if (!file) {
       parseStr += "Error! - File '";
       parseStr += filename;
@@ -699,27 +771,46 @@ bool CIccSingleSampledCurveXml::ParseXml(xmlNode *pNode, std::string &parseStr)
 
     // format is text
     if (!strcmp(format, "text")) {
-      size_t num = file->GetLength();
-      char *buf = new char[num];
-
-      if (!buf) {
-        perror("Memory Error");
+      icUInt32Number num;
+      if (!icXmlValidateFileCount(file->GetLength(), num, parseStr, filename)) {
+        delete file;
+        return false;
+      }
+      // Shared ceiling: prevents num+1 from wrapping size_t and caps
+      // downstream ParseTextArrayNum memory use. See IccUtilXml.h.
+      if (num > icXmlMaxTextFileBytes) {
         parseStr += "'";
         parseStr += filename;
-        parseStr += "' may not be a valid text file.\n";
+        parseStr += "' exceeds 256 MB limit.\n";
+        delete file;
+        return false;
+      }
+      // +1 and explicit NUL: ParseTextArrayNum eventually calls
+      // ParseText which scans until '\0'. Without a terminator
+      // it reads past the allocation into adjacent heap.
+      char *buf = new(std::nothrow) char[num + 1];
+
+      if (!buf) {
+        parseStr += "Out of memory allocating ";
+        parseStr += std::to_string(num + 1);
+        parseStr += " bytes for text buffer from '";
+        parseStr += filename;
+        parseStr += "'.\n";
         delete file;
         return false;
       }
 
       if (file->Read8(buf, num) != num) {
-        perror("Read-File Error");
-        parseStr += "'";
+        parseStr += "Read error: could not read ";
+        parseStr += std::to_string(num);
+        parseStr += " bytes from '";
         parseStr += filename;
-        parseStr += "' may not be a valid text file.\n";
+        parseStr += "'.\n";
         delete [] buf;
         delete file;
         return false;
       }
+      buf[num] = '\0';  // NUL-terminate for ParseText downstream
 
       // lut8type
       if (m_storageType == icValueTypeUInt8) {
@@ -835,10 +926,15 @@ bool CIccSingleSampledCurveXml::ParseXml(xmlNode *pNode, std::string &parseStr)
       bool little_endian = !strcmp(order, "little");
 
       if (m_storageType == icValueTypeUInt8) {
-        size_t num = file->GetLength();
+        icUInt32Number num;
         icUInt8Number value;
 
-        SetSize((icUInt32Number)num);
+        if (!icXmlValidateFileCount(file->GetLength(), num, parseStr, filename)) {
+          delete file;
+          return false;
+        }
+
+        SetSize(num);
         icFloatNumber *dst = m_pSamples;
         icUInt32Number i;
         for (i = 0; i < num; i++) {
@@ -856,11 +952,16 @@ bool CIccSingleSampledCurveXml::ParseXml(xmlNode *pNode, std::string &parseStr)
         return true;
       }
       else if (m_storageType == icValueTypeUInt16) {
-        size_t num = file->GetLength() / sizeof(icUInt16Number);
+        icUInt32Number num;
         icUInt16Number value;
         icUInt8Number *m_ptr = (icUInt8Number*)&value;
 
-        SetSize((icUInt32Number)num);
+        if (!icXmlValidateFileCount(file->GetLength() / sizeof(icUInt16Number), num, parseStr, filename)) {
+          delete file;
+          return false;
+        }
+
+        SetSize(num);
         icFloatNumber *dst = m_pSamples;
         icUInt32Number i;
         for (i = 0; i < num; i++) {
@@ -887,11 +988,16 @@ bool CIccSingleSampledCurveXml::ParseXml(xmlNode *pNode, std::string &parseStr)
         return true;
         }
       else if (m_storageType == icValueTypeFloat16) {
-        size_t num = file->GetLength() / sizeof(icFloat16Number);
+        icUInt32Number num;
         icFloat16Number value;
         icUInt8Number *m_ptr = (icUInt8Number*)&value;
 
-        SetSize((icUInt32Number)num);
+        if (!icXmlValidateFileCount(file->GetLength() / sizeof(icFloat16Number), num, parseStr, filename)) {
+          delete file;
+          return false;
+        }
+
+        SetSize(num);
         icFloatNumber *dst = m_pSamples;
         icUInt32Number i;
         for (i = 0; i < num; i++) {
@@ -918,11 +1024,16 @@ bool CIccSingleSampledCurveXml::ParseXml(xmlNode *pNode, std::string &parseStr)
         return true;
         }
       else if (m_storageType == icValueTypeFloat32) {
-        size_t num = file->GetLength() / sizeof(icFloat32Number);
+        icUInt32Number num;
         icFloat32Number value;
         icUInt8Number *m_ptr = (icUInt8Number*)&value;
 
-        SetSize((icUInt32Number)num);
+        if (!icXmlValidateFileCount(file->GetLength() / sizeof(icFloat32Number), num, parseStr, filename)) {
+          delete file;
+          return false;
+        }
+
+        SetSize(num);
         icFloatNumber *dst = m_pSamples;
 
         icUInt32Number i;
@@ -1825,9 +1936,9 @@ bool CIccMpeXmlToneMap::ParseXml(xmlNode* pNode, std::string& parseStr)
   xmlNode* pSubNode = icXmlFindNode(pNode->children, "LuminanceCurve");
 
   if (pSubNode) {
-    xmlNode* pNode;
-    for (pNode = pSubNode->children; pNode && pNode->type != XML_ELEMENT_NODE; pNode = pNode->next);
-    m_pLumCurve = ParseXmlCurve(pNode, parseStr);
+    xmlNode* pCurveNode;
+    for (pCurveNode = pSubNode->children; pCurveNode && pCurveNode->type != XML_ELEMENT_NODE; pCurveNode = pCurveNode->next);
+    m_pLumCurve = ParseXmlCurve(pCurveNode, parseStr);
     if (!m_pLumCurve) {
       parseStr += "Unable to parse Luminance Curve\n";
       return false;
@@ -1841,18 +1952,18 @@ bool CIccMpeXmlToneMap::ParseXml(xmlNode* pNode, std::string& parseStr)
   pSubNode = icXmlFindNode(pNode->children, "ToneMapFunctions");
 
   if (pSubNode) {
-    xmlNode* pNode;
+    xmlNode* pTfNode;
     int nIndex = 0;
-    for (pNode = pSubNode->children, nIndex = 0;
-      pNode;
-      pNode = pNode->next) {
-      if (pNode->type == XML_ELEMENT_NODE) {
+    for (pTfNode = pSubNode->children, nIndex = 0;
+      pTfNode;
+      pTfNode = pTfNode->next) {
+      if (pTfNode->type == XML_ELEMENT_NODE) {
         if (nIndex >= nOutputChannels) {
           parseStr += "Too many ToneFunctions";
           return false;
         }
-        else if (!strcmp((const char*)pNode->name, "DuplicateFunction")) {
-          const char* attr = icXmlAttrValue(pNode, "Index", NULL);
+        else if (!strcmp((const char*)pTfNode->name, "DuplicateFunction")) {
+          const char* attr = icXmlAttrValue(pTfNode, "Index", NULL);
 
           if (attr) {
             int nCopyIndex = atoi(attr);
@@ -1870,10 +1981,10 @@ bool CIccMpeXmlToneMap::ParseXml(xmlNode* pNode, std::string& parseStr)
             return false;
           }
         }
-        else if (!strcmp((const char*)pNode->name, "ToneMapFunction")) {
+        else if (!strcmp((const char*)pTfNode->name, "ToneMapFunction")) {
           CIccXmlToneMapFunc* pFunc = new CIccXmlToneMapFunc();
 
-          if (!pFunc->ParseXml(pNode, parseStr)) {
+          if (!pFunc->ParseXml(pTfNode, parseStr)) {
             delete pFunc;
             return false;
           }
@@ -1882,7 +1993,7 @@ bool CIccMpeXmlToneMap::ParseXml(xmlNode* pNode, std::string& parseStr)
           nIndex++;
         }
         else {
-          parseStr += std::string("Unknown Tone Map Function '") + (const char*)pNode->name + "'\n";
+          parseStr += std::string("Unknown Tone Map Function '") + (const char*)pTfNode->name + "'\n";
           return false;
         }
       }
@@ -2387,6 +2498,17 @@ bool CIccMpeXmlCalculator::ParseImport(xmlNode *pNode, std::string importPath, s
             xmlDoc *doc = NULL;
             xmlNode *root_element = NULL;
 
+            // Gate behind the same allow-file-includes flag and path
+            // sanitizer used by IccXmlSafeOpenFileIO so that
+            // <Import Filename="..."> cannot be used as a file-read
+            // primitive when the library is in its default-off state.
+            if (!IccXmlGetAllowFileIncludes() || !IccXmlIsPathSafe(file.c_str())) {
+              parseStr += "File includes disabled or path rejected for import '";
+              parseStr += file;
+              parseStr += "' (file includes may be disabled or path rejected as unsafe)\n";
+              return false;
+            }
+
             std::string look = "*";
             look += file;
             look += "*";
@@ -2396,8 +2518,11 @@ bool CIccMpeXmlCalculator::ParseImport(xmlNode *pNode, std::string importPath, s
               continue;
             }
 
-            /*parse the file and get the DOM */
-            doc = xmlReadFile(file.c_str(), NULL, 0);
+            /* Parse the file and get the DOM. See IccProfileXml.cpp for
+             * the rationale for dropping XML_PARSE_HUGE and adding
+             * XML_PARSE_NOENT — matches the main LoadXml entry point.
+             */
+            doc = xmlReadFile(file.c_str(), NULL, XML_PARSE_NONET | XML_PARSE_NOENT);
 
             if (doc == NULL) {
               parseStr += "Unable to import '";
@@ -2606,7 +2731,6 @@ bool CIccMpeXmlCalculator::ParseImport(xmlNode *pNode, std::string importPath, s
           pSubCalc->m_sImport = importPath;
         }
 
-        xmlAttr *attr;
         IIccExtensionMpe *pExt = pMpe->GetExtension();
 
         if (pExt) {
@@ -2717,8 +2841,14 @@ bool CIccMpeXmlCalculator::ValidateMacroCalls(std::string &parseStr) const
   return true;
 }
 
-bool CIccMpeXmlCalculator::Flatten(std::string &flatStr, std::string macroName, const char *szFunc, std::string &parseStr, icUInt32Number nLocalsOffset)
+bool CIccMpeXmlCalculator::Flatten(std::string &flatStr, std::string macroName, const char *szFunc, std::string &parseStr, icUInt32Number nLocalsOffset, icUInt32Number nDepth)
 {
+  // CWE-674: hard cap on macro-call recursion depth (defense in depth).
+  if (nDepth >= kMaxFlattenDepth) {
+    parseStr += "Macro recursion depth limit exceeded in '" + macroName + "'\n";
+    return false;
+  }
+
   CIccFuncTokenizer parse(szFunc, true);
 
   while (parse.GetNext()) {
@@ -2755,7 +2885,7 @@ bool CIccMpeXmlCalculator::Flatten(std::string &flatStr, std::string macroName, 
         
         int i;
         for (i = 0; i < iter; i++) {
-          Flatten(flatStr, name, m->second.c_str(), parseStr, nLocalsOffset+nLocalsSize);
+          Flatten(flatStr, name, m->second.c_str(), parseStr, nLocalsOffset+nLocalsSize, nDepth + 1);
         }
       }
       else {
@@ -3141,11 +3271,29 @@ bool CIccMpeXmlCalculator::ParseChanMap(ChanVarMap& chanMap, const char *szNames
 
 bool CIccMpeXmlCalculator::ParseXml(xmlNode *pNode, std::string &parseStr)
 {
+  // Guard against nested <CalculatorElement><SubElements>…</> recursion.
+  // Each level is one C++ stack frame; on Emscripten's ~1 MB stack a
+  // crafted XML with a few thousand nested CalculatorElements blows
+  // through it. 32 levels is generous for any legitimate iccMAX
+  // calculator.
+  static thread_local int s_xmlCalcDepth = 0;
+  static const int kMaxXmlCalcDepth = 32;
+
+  struct DepthGuard {
+    int *p;
+    DepthGuard(int *pp) : p(pp) { ++*p; }
+    ~DepthGuard() { --*p; }
+  } depthGuard(&s_xmlCalcDepth);
+  if (s_xmlCalcDepth > kMaxXmlCalcDepth) {
+    parseStr += "CalculatorElement nesting exceeds 32 levels\n";
+    return false;
+  }
+
   xmlNode *pChild;
 
   if (!pNode)
     return false;
-  
+
   SetSize(atoi(icXmlAttrValue(pNode, "InputChannels")),
           atoi(icXmlAttrValue(pNode, "OutputChannels")));
 

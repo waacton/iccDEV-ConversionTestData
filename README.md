@@ -43,6 +43,10 @@ The rest of the contents of this README are from the original repo.
 
 To build from source, see: [Build documentation](docs/build.md)
 
+API docs:
+[API reference](Tools/Winnt/IccIisIsapi/api.md) ·
+[OpenAPI starter](Tools/Winnt/IccIisIsapi/iis-isapi.openapi.yaml)
+
 ## Introduction
 
 The purpose of the International Color Consortium (ICC) is to promote

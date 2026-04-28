@@ -1033,6 +1033,8 @@ CIccTagArray::CIccTagArray(icArraySignature sigArrayType/* =icSigUndefinedArray 
 ******************************************************************************/
 CIccTagArray::CIccTagArray(const CIccTagArray &tagAry)
 {
+  m_TagVals = NULL;
+  m_nSize = 0;
   if (tagAry.m_nSize) {
     m_TagVals = new IccTagPtr[tagAry.m_nSize];
 
@@ -1070,11 +1072,13 @@ CIccTagArray &CIccTagArray::operator=(const CIccTagArray &tagAry)
 
   Cleanup();
 
+  m_TagVals = NULL;
+  m_nSize = 0;
   if (tagAry.m_nSize) {
     m_TagVals = new IccTagPtr[tagAry.m_nSize];
 
     icUInt32Number i;
-    for (i=0; i<m_nSize; i++) {
+    for (i=0; i<tagAry.m_nSize; i++) {
       if (tagAry.m_TagVals[i].ptr)
         m_TagVals[i].ptr = tagAry.m_TagVals[i].ptr->NewCopy();
       else
@@ -1188,13 +1192,13 @@ void CIccTagArray::Describe(std::string &sDescription, int nVerboseness)
   for (i=0; i<m_nSize; i++) {
     if (i)
       sDescription += "\n";
-    snprintf(buf, bufSize, "BEGIN INDEX[%d]\n", i);
+    snprintf(buf, bufSize, "BEGIN INDEX[%u]\n", i);
     sDescription +=  buf;
     
     if (m_TagVals[i].ptr) {
       m_TagVals[i].ptr->Describe(sDescription, nVerboseness);
     }
-    snprintf(buf, bufSize, "END INDEX[%d]\n", i);
+    snprintf(buf, bufSize, "END INDEX[%u]\n", i);
     sDescription += buf;
   }
 
@@ -1252,7 +1256,16 @@ bool CIccTagArray::Read(icUInt32Number size, CIccIO *pIO)
   if (!pIO->Read32(&count))
     return false;
 
-  if (headerSize + count*sizeof(icPositionNumber) > size)
+  // 64-bit widened bounds check so attacker-controlled `count` can't
+  // wrap the multiplication on wasm32 (size_t == u32) and bypass the
+  // guard before `new icPositionNumber[count]` is attempted. Mirror
+  // the u64 pattern already in CIccTagStruct::Read above.
+  static const icUInt32Number kMaxArrayEntries = 0x100000;  // 2^20
+  if (count > kMaxArrayEntries)
+    return false;
+  icUInt64Number tableBytes =
+      static_cast<icUInt64Number>(count) * sizeof(icPositionNumber);
+  if (static_cast<icUInt64Number>(headerSize) + tableBytes > size)
     return false;
 
   if (count) {
@@ -1286,14 +1299,17 @@ bool CIccTagArray::Read(icUInt32Number size, CIccIO *pIO)
         m_TagVals[i].ptr = m_TagVals[j].ptr;
       }
       else {
-        if (tagPos[i].offset + tagPos[i].size > size) {
+        if (tagPos[i].size > size || tagPos[i].offset > size - tagPos[i].size) {
           delete [] tagPos;
           return false;
         }
         pIO->Seek(nTagStart + tagPos[i].offset, icSeekSet);
 
         icTagTypeSignature tagSig;
-        pIO->Read32(&tagSig);
+        if (!pIO->Read32(&tagSig)) {
+          delete [] tagPos;
+          return false;
+        }
         pIO->Seek(nTagStart + tagPos[i].offset, icSeekSet);
 
         CIccTag *pTag = CIccTagCreator::CreateTag(tagSig);
@@ -1373,7 +1389,7 @@ bool CIccTagArray::Write(CIccIO *pIO)
 
         if (j<i) {
           tagPos[i].offset = tagPos[j].offset;
-          tagPos[i].size = tagPos[j].offset;
+          tagPos[i].size = tagPos[j].size;
         }
         else {
           tagPos[i].offset = (icUInt32Number)(pIO->Tell() - nTagStart);
@@ -1422,22 +1438,32 @@ bool CIccTagArray::Write(CIccIO *pIO)
 bool CIccTagArray::SetSize(icUInt32Number nSize)
 {
   if (!m_nSize) {
-    m_TagVals = (IccTagPtr*)calloc(nSize, sizeof(IccTagPtr));
-    if (!m_TagVals) {
-      m_nSize =0;
-      return false;
-    }
-  }
-  else {
-    if (nSize<=m_nSize)
-      return true;
-
-    m_TagVals = (IccTagPtr*)icRealloc(m_TagVals, nSize*sizeof(IccTagPtr));
+    m_TagVals = new IccTagPtr[nSize];
     if (!m_TagVals) {
       m_nSize = 0;
       return false;
     }
-    memset(&m_TagVals[m_nSize], 0, (nSize-m_nSize)*sizeof(IccTagPtr));
+    memset(m_TagVals, 0, nSize*sizeof(IccTagPtr));
+  }
+  else {
+    if (nSize<=m_nSize)
+      return true;
+      
+    // We need to grow the array, and keep the existing values.
+    // This would be much easier with a std::vector
+    auto oldArray = m_TagVals;
+    m_TagVals = new IccTagPtr[nSize];
+    if (!m_TagVals) {
+      delete[] oldArray;
+      m_nSize = 0;
+      return false;
+    }
+    // copy old values
+    memcpy( m_TagVals, oldArray, m_nSize*sizeof(IccTagPtr) );
+    // zero newly added values
+    memset( &m_TagVals[m_nSize], 0, (nSize-m_nSize)*sizeof(IccTagPtr) );
+    // delete old array (does NOT delete values)
+    delete[] oldArray;
   }
   m_nSize = nSize;
   return true;
@@ -1467,14 +1493,14 @@ icValidateStatus CIccTagArray::Validate(std::string sigPath, std::string &sRepor
   }
   else if (m_sigArrayType==icSigUtf8TextTypeArray) { //UTF8 text arrays are known
     //Check # of channels 
-    if (icGetFirstSigPathSig(sigPath) == icSigMaterialTypeArrayTag && 
+    if (icGetFirstSigPathSig(sigPath) == icSigMultiplexTypeArrayTag && 
         pProfile &&
-        m_nSize != icGetMaterialColorSpaceSamples(pProfile->m_Header.mcs)) {
+        m_nSize != icGetMultiplexColorSpaceSamples(pProfile->m_Header.mcs)) {
       std::string sSigPathName = Info.GetSigPathName(sigPath);
 
       sReport += icMsgValidateCriticalError;
       sReport += sSigPathName;
-      sReport += " - Number of material channel names does not match MCS in header.\n";
+      sReport += " - Number of multiplex channel names does not match MCS in header.\n";
       rv = icMaxStatus(rv, icValidateCriticalError);
     }
     icUInt32Number i;
@@ -1520,8 +1546,10 @@ void CIccTagArray::Cleanup()
   }
 
   if (m_TagVals)
-    free(m_TagVals);
+    delete[] m_TagVals;
   m_TagVals = nullptr;
+
+  m_nSize = 0;
 
   if (m_pArray)
     delete m_pArray;
@@ -1545,7 +1573,13 @@ void CIccTagArray::Cleanup()
 */
 CIccTag* CIccTagArray::GetIndex(icUInt32Number nIndex) const
 {
-  if (nIndex>m_nSize)
+  // Two bugs: `>` should be `>=` (reads one past array), and m_TagVals
+  // can be NULL when SetSize(0) was never called (Read guards SetSize
+  // behind `if (count)` at ~line 1262; zero-length array leaves the
+  // pointer at its default NULL). CIccArrayNamedColor::Begin /
+  // FindColor call GetIndex(0) unconditionally, so this is reachable
+  // from CMM apply time.
+  if (!m_TagVals || nIndex>=m_nSize)
     return NULL;
 
   return m_TagVals[nIndex].ptr;

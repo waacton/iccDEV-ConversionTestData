@@ -1,11 +1,13 @@
 #################################################################################
 # Cmake Project Configuration| iccDEV Project
-# Copyright (C) 2024-2026 The International Color Consortium.
+# Copyright (c) 2024-2026 The International Color Consortium.
 #                                        All rights reserved.
 #
-#  Last Updated: 2026-03-08 02:09:45 UTC by David Hoyt
+#  Last Updated: 2026-04-02 02:20:35 UTC by David Hoyt
 #
-#  Changes: 25+ Bug Fizes over 30 Days, Bump Version String References: (#660)
+# CMake Configuration:
+# - Fix: Change IccApplyNamedCmm to iccApplyNamedCmm
+#
 #
 #################################################################################
 
@@ -63,13 +65,19 @@ message(STATUS "")
 # Verbose Makefile Output (for Make/Ninja generators)
 # ----------------------------------------------------------------------
 
-set(CMAKE_VERBOSE_MAKEFILE ON)
+set(CMAKE_VERBOSE_MAKEFILE OFF)
 
 # ----------------------------------------------------------------------
-# Define Default Configurations (for MSVC/Xcode generators)
+# Define Default Configurations (for MSVC/Xcode/Ninja Multi-Config generators)
 # ----------------------------------------------------------------------
+# CMAKE_CONFIGURATION_TYPES is only meaningful for multi-config generators.
+# Setting it on single-config generators (Make, Ninja) causes downstream
+# logic to misidentify the generator as multi-config, leading to incorrect
+# LTO configuration and static libraries containing LLVM bitcode instead
+# of native object code.  (See GitHub issue #814.)
 
-if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
+get_property(_is_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+if(_is_multi_config AND NOT CMAKE_CONFIGURATION_TYPES)
   set(CMAKE_CONFIGURATION_TYPES "Debug;Release;RelWithDebInfo;MinSizeRel" CACHE STRING "Available configurations" FORCE)
   set_property(GLOBAL PROPERTY DEBUG_CONFIGURATIONS Debug)
   set_property(GLOBAL PROPERTY RELEASE_CONFIGURATIONS Release RelWithDebInfo MinSizeRel)
@@ -119,11 +127,11 @@ project(RefIccMAX LANGUAGES C CXX)
 set(PROJECT_UP_NAME "REFICCMAX")
 set(PROJECT_DOWN_NAME "reficcmax")
 
-# Version components (4-part version: 2.3.1.5)
+# Version components (4-part version: 2.3.1.8)
 set(${PROJECT_UP_NAME}_MAJOR_VERSION 2)
 set(${PROJECT_UP_NAME}_MINOR_VERSION 3)
 set(${PROJECT_UP_NAME}_MICRO_VERSION 1)
-set(${PROJECT_UP_NAME}_PATCH_VERSION 5)
+set(${PROJECT_UP_NAME}_PATCH_VERSION 8)
 
 # Composite versions
 set(${PROJECT_UP_NAME}_VERSION
@@ -164,6 +172,15 @@ endif()
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build." FORCE)
 endif()
+
+# ----------------------------------------------------------------------
+# Debug Library Postfix (disambiguate Debug vs Release install)
+# ----------------------------------------------------------------------
+# Appends "d" to Debug library names (e.g., libIccProfLib2d.so) so that
+# Debug and Release libraries can coexist in the same install prefix.
+# This is especially important for multi-config generators (Visual Studio, Xcode).
+
+set(CMAKE_DEBUG_POSTFIX "d")
 
 # ----------------------------------------------------------------------
 # Verbose Configuration Toggle
@@ -263,23 +280,25 @@ message(STATUS "### Environment Diagnostics ###")
 # Detect path separator
 set(PATH_SEPARATOR $<IF:$<BOOL:${WIN32}>,";",":">)
 
-# Pretty-print the PATH variable (numbered entries)
-string(REPLACE "${PATH_SEPARATOR}" ";" PATH_LIST "$ENV{PATH}")
-list(LENGTH PATH_LIST PATH_LENGTH)
+# Pretty-print the PATH variable (numbered entries) only with VERBOSE_CONFIG
+if(VERBOSE_CONFIG)
+  string(REPLACE "${PATH_SEPARATOR}" ";" PATH_LIST "$ENV{PATH}")
+  list(LENGTH PATH_LIST PATH_LENGTH)
 
-message(STATUS "PATH Entries:")
-foreach(INDEX RANGE 0 ${PATH_LENGTH})
-  math(EXPR IDX "${INDEX} - 1")
-  if(IDX GREATER_EQUAL 0)
-    list(GET PATH_LIST ${IDX} PATH_ENTRY)
-    message(STATUS "  [${IDX}] ${PATH_ENTRY}")
-  endif()
-endforeach()
+  message(STATUS "PATH Entries:")
+  foreach(INDEX RANGE 0 ${PATH_LENGTH})
+    math(EXPR IDX "${INDEX} - 1")
+    if(IDX GREATER_EQUAL 0)
+      list(GET PATH_LIST ${IDX} PATH_ENTRY)
+      message(STATUS "  [${IDX}] ${PATH_ENTRY}")
+    endif()
+  endforeach()
 
-# Core CMake Environment Variables
-message(STATUS "CMAKE_PREFIX_PATH        : ${CMAKE_PREFIX_PATH}")
-message(STATUS "CMAKE_INSTALL_PREFIX     : ${CMAKE_INSTALL_PREFIX}")
-message(STATUS "CMAKE_MODULE_PATH        : ${CMAKE_MODULE_PATH}")
+  # Core CMake Environment Variables
+  message(STATUS "CMAKE_PREFIX_PATH        : ${CMAKE_PREFIX_PATH}")
+  message(STATUS "CMAKE_INSTALL_PREFIX     : ${CMAKE_INSTALL_PREFIX}")
+  message(STATUS "CMAKE_MODULE_PATH        : ${CMAKE_MODULE_PATH}")
+endif()
 
 # ----------------------------------------------------------------------
 # Compiler and Toolchain Diagnostics
@@ -398,11 +417,7 @@ if(VERBOSE_CONFIG)
   message(STATUS "LibXml2                : ${LIBXML2_LIBRARIES} (version: ${LIBXML2_VERSION})")
 endif()
 
-# --- nlohmann_json ---
-find_package(nlohmann_json REQUIRED)
-if(VERBOSE_CONFIG)
-  message(STATUS "nlohmann_json          : ${nlohmann_json_DIR} (version: ${nlohmann_json_VERSION})")
-endif()
+# --- nlohmann_json (found later, guarded by ENABLE_ICCJSON) ---
 
 # --- TIFF ---
 find_package(TIFF REQUIRED)
@@ -513,9 +528,12 @@ message(STATUS "### Build Options ###")
 # Build and feature flags
 option(ENABLE_TESTS               "Build tests (requires static libs)"                  ON)
 option(ENABLE_TOOLS               "Build tools (command-line + GUI)"                    ON)
+option(ENABLE_WXWIDGETS           "Build wxProfileDump GUI tool (requires wxWidgets)"   ON)
 option(ENABLE_SHARED_LIBS         "Build dynamic link libraries"                        ON)
 option(ENABLE_STATIC_LIBS         "Build static libraries"                              ON)
 option(ENABLE_ICCXML              "Build IccXML library support"                        ON)
+option(ENABLE_ICCJSON             "Build IccJSON library support"                       ON)
+option(ICC_JSON_ORDERED           "Use ordered_json for deterministic key order (slower)" OFF)
 option(ICC_TRACE_NAN_ENABLED      "Enable tracing NaN inputs in debug builds"           OFF)
 option(ICC_CLUT_DEBUG             "Enable CLUT debugging support"                       OFF)
 option(ICC_ENABLE_ASSERTS         "Enable ICC_ASSERT traps and debug assertions"        OFF)
@@ -524,12 +542,16 @@ option(ENABLE_SANITIZERS          "Enable runtime sanitizers (ASan, UBSan, etc.)
 option(ENABLE_ASAN                "Enable AddressSanitizer only"                        OFF)
 option(ENABLE_FUZZING             "Enable libFuzzer harnesses (Clang only)"             OFF)
 option(ENABLE_UBSAN               "Enable UndefinedBehaviorSanitizer only"              OFF)
+option(ENABLE_INTEGER_SANITIZER   "Enable IntegerSanitizer (unsigned overflow, etc.)"   OFF)
+option(ENABLE_FLOAT_SANITIZER     "Enable float-divide-by-zero + float-cast-overflow"   OFF)
 option(ENABLE_TSAN                "Enable ThreadSanitizer (conflicts with ASan)"        OFF)
 option(ENABLE_MSAN                "Enable MemorySanitizer (Clang only)"                 OFF)
 option(ENABLE_LSAN                "Enable LeakSanitizer standalone"                     OFF)
 option(ENABLE_COVERAGE            "Enable code coverage instrumentation"                OFF)
 option(ENABLE_PROFILING           "Enable gprof/perf profiling instrumentation"         OFF)
 option(ENABLE_SPECTRE_MITIGATION  "Enable /Qspectre on MSVC for Spectre V1 mitigation"  OFF)
+option(SANITIZER_RECOVER          "Allow sanitizer violations to continue (runtime control)" OFF)
+set(UBSAN_IGNORELIST "" CACHE STRING "Path to UBSAN ignorelist file for compile-time suppression")
 option(ENABLE_USEICCDEVNAMESPACE  "Use iccDEV namespace wrapping"                       OFF)
 
 if(ENABLE_USEICCDEVNAMESPACE)
@@ -559,6 +581,7 @@ endif()
 # ----------------------------------------------------------------------
 message(STATUS "ENABLE_TESTS               = ${ENABLE_TESTS}")
 message(STATUS "ENABLE_TOOLS               = ${ENABLE_TOOLS}")
+message(STATUS "ENABLE_WXWIDGETS           = ${ENABLE_WXWIDGETS}")
 message(STATUS "ENABLE_SHARED_LIBS         = ${ENABLE_SHARED_LIBS}")
 message(STATUS "ENABLE_STATIC_LIBS         = ${ENABLE_STATIC_LIBS}")
 message(STATUS "ENABLE_ICCXML              = ${ENABLE_ICCXML}")
@@ -569,6 +592,8 @@ message(STATUS "ICC_LOG_SAFE               = ${ICC_LOG_SAFE}")
 message(STATUS "ENABLE_SANITIZERS          = ${ENABLE_SANITIZERS}")
 message(STATUS "ENABLE_ASAN                = ${ENABLE_ASAN}")
 message(STATUS "ENABLE_UBSAN               = ${ENABLE_UBSAN}")
+message(STATUS "ENABLE_INTEGER_SANITIZER   = ${ENABLE_INTEGER_SANITIZER}")
+message(STATUS "ENABLE_FLOAT_SANITIZER     = ${ENABLE_FLOAT_SANITIZER}")
 message(STATUS "ENABLE_TSAN                = ${ENABLE_TSAN}")
 message(STATUS "ENABLE_MSAN                = ${ENABLE_MSAN}")
 message(STATUS "ENABLE_LSAN                = ${ENABLE_LSAN}")
@@ -576,6 +601,10 @@ message(STATUS "ENABLE_FUZZING             = ${ENABLE_FUZZING}")
 message(STATUS "ENABLE_COVERAGE            = ${ENABLE_COVERAGE}")
 message(STATUS "ENABLE_PROFILING           = ${ENABLE_PROFILING}")
 message(STATUS "ENABLE_SPECTRE_MITIGATION  = ${ENABLE_SPECTRE_MITIGATION}")
+message(STATUS "SANITIZER_RECOVER          = ${SANITIZER_RECOVER}")
+if(UBSAN_IGNORELIST)
+  message(STATUS "UBSAN_IGNORELIST           = ${UBSAN_IGNORELIST}")
+endif()
 message(STATUS "")
 
 # ----------------------------------------------------------------------
@@ -599,6 +628,9 @@ if(ENABLE_FUZZING OR ENABLE_SANITIZERS)
   endif()
   if(ENABLE_UBSAN)
     list(APPEND _ignored_options "ENABLE_UBSAN")
+  endif()
+  if(ENABLE_INTEGER_SANITIZER)
+    list(APPEND _ignored_options "ENABLE_INTEGER_SANITIZER")
   endif()
   if(ENABLE_TSAN)
     list(APPEND _ignored_options "ENABLE_TSAN")
@@ -631,12 +663,13 @@ if(ENABLE_FUZZING)
   # DO NOT apply fuzzer flags globally - causes linker conflicts with regular tools
   # Fuzzer targets get flags via target_compile_options/target_link_options
 elseif(ENABLE_SANITIZERS)
-  message(STATUS ">>> Sanitizers enabled: AddressSanitizer and UndefinedBehaviorSanitizer active")
+  message(STATUS ">>> Sanitizers enabled: ASan + UBSan + IntSan + float-divide-by-zero + float-cast-overflow")
   if(MSVC)
     list(APPEND SANITIZER_FLAGS "/fsanitize=address")
-    # MSVC doesn't have UBSan, but has runtime checks via /RTC1 in debug
+    # MSVC doesn't have UBSan/IntSan, but has runtime checks via /RTC1 in debug
   else()
-    list(APPEND SANITIZER_LIST "address" "undefined")
+    list(APPEND SANITIZER_LIST "address" "undefined" "integer"
+         "float-divide-by-zero" "float-cast-overflow")
   endif()
 else()
   # Individual sanitizer options
@@ -654,6 +687,22 @@ else()
       message(WARNING "UndefinedBehaviorSanitizer not available on MSVC")
     else()
       list(APPEND SANITIZER_LIST "undefined")
+    endif()
+  endif()
+  if(ENABLE_INTEGER_SANITIZER)
+    message(STATUS ">>> IntegerSanitizer enabled (unsigned-integer-overflow, implicit conversions)")
+    if(MSVC)
+      message(WARNING "IntegerSanitizer not available on MSVC")
+    else()
+      list(APPEND SANITIZER_LIST "integer")
+    endif()
+  endif()
+  if(ENABLE_FLOAT_SANITIZER)
+    message(STATUS ">>> Float sanitizers enabled (float-divide-by-zero, float-cast-overflow)")
+    if(MSVC)
+      message(WARNING "Float sanitizers not available on MSVC")
+    else()
+      list(APPEND SANITIZER_LIST "float-divide-by-zero" "float-cast-overflow")
     endif()
   endif()
   if(ENABLE_TSAN)
@@ -690,10 +739,42 @@ if(SANITIZER_LIST)
   string(REPLACE ";" "," SANITIZER_STRING "${SANITIZER_LIST}")
   list(APPEND SANITIZER_FLAGS "-fsanitize=${SANITIZER_STRING}")
   list(APPEND SANITIZER_FLAGS "-fno-omit-frame-pointer")
-  # Make UndefinedBehaviorSanitizer violations fatal (abort on first UB)
-  list(FIND SANITIZER_LIST "undefined" _ubsan_idx)
-  if(NOT _ubsan_idx EQUAL -1)
-    list(APPEND SANITIZER_FLAGS "-fno-sanitize-recover=undefined")
+  if(NOT SANITIZER_RECOVER)
+    # Make UndefinedBehaviorSanitizer violations fatal (abort on first UB)
+    list(FIND SANITIZER_LIST "undefined" _ubsan_idx)
+    if(NOT _ubsan_idx EQUAL -1)
+      list(APPEND SANITIZER_FLAGS "-fno-sanitize-recover=undefined")
+    endif()
+    # Make IntegerSanitizer violations fatal (abort on unsigned overflow)
+    list(FIND SANITIZER_LIST "integer" _intsan_idx)
+    if(NOT _intsan_idx EQUAL -1)
+      list(APPEND SANITIZER_FLAGS "-fno-sanitize-recover=integer")
+    endif()
+    # Make float sanitizer violations fatal (div-by-zero, cast overflow)
+    list(FIND SANITIZER_LIST "float-divide-by-zero" _fdz_idx)
+    if(NOT _fdz_idx EQUAL -1)
+      list(APPEND SANITIZER_FLAGS "-fno-sanitize-recover=float-divide-by-zero")
+    endif()
+    list(FIND SANITIZER_LIST "float-cast-overflow" _fco_idx)
+    if(NOT _fco_idx EQUAL -1)
+      list(APPEND SANITIZER_FLAGS "-fno-sanitize-recover=float-cast-overflow")
+    endif()
+  else()
+    message(STATUS ">>> Sanitizer recovery enabled (runtime UBSAN_OPTIONS controls halt behavior)")
+  endif()
+  # Apply UBSAN ignorelist for compile-time suppression of known-benign findings
+  if(UBSAN_IGNORELIST)
+    if(EXISTS "${UBSAN_IGNORELIST}")
+      list(APPEND SANITIZER_FLAGS "-fsanitize-ignorelist=${UBSAN_IGNORELIST}")
+      message(STATUS ">>> UBSAN ignorelist: ${UBSAN_IGNORELIST}")
+    elseif(EXISTS "${CMAKE_SOURCE_DIR}/../../${UBSAN_IGNORELIST}")
+      set(_abs_ignorelist "${CMAKE_SOURCE_DIR}/../../${UBSAN_IGNORELIST}")
+      get_filename_component(_abs_ignorelist "${_abs_ignorelist}" ABSOLUTE)
+      list(APPEND SANITIZER_FLAGS "-fsanitize-ignorelist=${_abs_ignorelist}")
+      message(STATUS ">>> UBSAN ignorelist: ${_abs_ignorelist}")
+    else()
+      message(WARNING "UBSAN_IGNORELIST set to '${UBSAN_IGNORELIST}' but file not found")
+    endif()
   endif()
 endif()
 
@@ -739,15 +820,29 @@ endif()
 # ----------------------------------------------------------------------
 # Link-Time Optimization (LTO/IPO)
 # ----------------------------------------------------------------------
+#
+# LTO is enabled by default for Release builds when the compiler supports it
+# and no coverage/profiling/sanitizer instrumentation is active.
+#
+# Users can override this by passing -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF
+# on the cmake command line.  This is useful when consuming static archives
+# (.a files) with a linker that does not support LLVM bitcode (e.g. /usr/bin/ld).
 
 include(CheckIPOSupported)
 check_ipo_supported(RESULT ipo_supported OUTPUT ipo_output)
 
-if(ipo_supported)
-  if(CMAKE_BUILD_TYPE MATCHES "Release" AND NOT ENABLE_COVERAGE AND NOT ENABLE_PROFILING AND NOT SANITIZER_FLAGS)
-    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
-    message(STATUS ">>> Link-Time Optimization (LTO) enabled for Release builds")
-  elseif(CMAKE_BUILD_TYPE MATCHES "Release")
+if(DEFINED CMAKE_INTERPROCEDURAL_OPTIMIZATION)
+  # User explicitly set LTO preference via -D flag; respect it unconditionally
+  message(STATUS ">>> Link-Time Optimization (LTO): ${CMAKE_INTERPROCEDURAL_OPTIMIZATION} (user override)")
+elseif(DEFINED VCPKG_TARGET_TRIPLET AND ENABLE_STATIC_LIBS AND NOT ENABLE_SHARED_LIBS)
+  # Packaged static vcpkg builds are consumed by non-Clang toolchains and linkers.
+  # Keep these archives free of LLVM bitcode even when the port forgets to pass
+  # -DCMAKE_INTERPROCEDURAL_OPTIMIZATION=OFF.
+  set(CMAKE_INTERPROCEDURAL_OPTIMIZATION OFF)
+  message(STATUS ">>> Link-Time Optimization (LTO) disabled: vcpkg static package build")
+elseif(ipo_supported)
+  if(SANITIZER_FLAGS OR ENABLE_COVERAGE OR ENABLE_PROFILING)
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION OFF)
     set(_lto_reason "")
     if(ENABLE_COVERAGE)
       set(_lto_reason "ENABLE_COVERAGE is ON")
@@ -757,6 +852,23 @@ if(ipo_supported)
       set(_lto_reason "sanitizers are enabled")
     endif()
     message(STATUS ">>> Link-Time Optimization (LTO) disabled: ${_lto_reason}")
+  elseif(WIN32 AND ENABLE_SHARED_LIBS)
+    # WINDOWS_EXPORT_ALL_SYMBOLS requires standard COFF objects at link time.
+    # MSVC /GL (whole-program optimization) produces LTCG bytecode objects that
+    # bypass the WEAS symbol scanner, resulting in missing DLL exports and
+    # LNK2001 unresolved externals when consumers link the import library.
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION OFF)
+    message(STATUS ">>> Link-Time Optimization (LTO) disabled: WINDOWS_EXPORT_ALL_SYMBOLS requires COFF objects")
+  elseif(_is_multi_config)
+    # Multi-config generator (Visual Studio, Xcode, Ninja Multi-Config):
+    # enable LTO for Release only
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+    message(STATUS ">>> Link-Time Optimization (LTO) enabled for Release configuration (multi-config)")
+  elseif(CMAKE_BUILD_TYPE STREQUAL "Release")
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION ON)
+    message(STATUS ">>> Link-Time Optimization (LTO) enabled for Release builds")
+  else()
+    message(STATUS ">>> Link-Time Optimization (LTO) disabled: build type is '${CMAKE_BUILD_TYPE}'")
   endif()
 else()
   message(STATUS ">>> Link-Time Optimization (LTO) not supported: ${ipo_output}")
@@ -905,24 +1017,103 @@ if(APPLE)
 
   message(STATUS "Final macOS architectures: ${CMAKE_OSX_ARCHITECTURES}")
 
-elseif(UNIX AND NOT APPLE)
-  message(STATUS "Detected platform: Linux")
-
-  # Recommended flags for Linux/Clang or GCC
+  # macOS hardening flags (parity with Linux)
+  # Base set: works on any C++17-capable compiler.
   add_compile_options(
     -Wall
     -Wextra
     -Wformat
     -Wformat-security
     -Wimplicit-fallthrough
-    -Wno-overloaded-virtual
-    -Wno-switch
-    -Wno-unused-parameter
-    -Wno-unused-variable
-    -Wno-missing-field-initializers
+    -Wsign-compare
+    -Wnon-virtual-dtor
+    -Wuninitialized
+    -fstack-protector-strong
+  )
+
+  # Strict warning tier: requires GCC 15+ or Clang 14+ for reliable analysis.
+  # Older compilers still build; they just produce fewer diagnostics.
+  set(_iccdev_strict_capable FALSE)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS "15.0")
+    set(_iccdev_strict_capable TRUE)
+  elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS "14.0")
+    set(_iccdev_strict_capable TRUE)
+  endif()
+  if(_iccdev_strict_capable)
+    add_compile_options(
+      -Werror=uninitialized
+      -Wshadow
+      -Wnull-dereference
+      -Wundef
+      -Wpointer-arith
+    )
+    message(STATUS "macOS: strict warnings ENABLED (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION})")
+  else()
+    message(STATUS "macOS: strict warnings DISABLED -- ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} below floor (GCC 15 / Clang 14). Base hardening still active.")
+  endif()
+
+  # Fortify source for optimized builds (requires -O1 or higher)
+  if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+    add_compile_definitions(_FORTIFY_SOURCE=2)
+  endif()
+
+  message(STATUS "macOS build: Warning flags and security hardening applied.")
+
+elseif(UNIX AND NOT APPLE AND NOT EMSCRIPTEN)
+  message(STATUS "Detected platform: Linux")
+
+  # Recommended flags for Linux/Clang or GCC.
+  # Base set: works on any C++17-capable compiler (GCC 11+, Clang 14+).
+  add_compile_options(
+    -Wall
+    -Wextra
+    -Wformat
+    -Wformat-security
+    -Wimplicit-fallthrough
+    -Wsign-compare
+    -Wnon-virtual-dtor
+    -Wuninitialized
     -fstack-protector-strong
     -fstack-clash-protection
   )
+
+  # Strict warning tier: requires GCC 15+ or Clang 14+ so all contributors and
+  # CI see the same diagnostics. Older toolchains still build; they get the
+  # base set above plus reduced analysis. ci-docker (ubuntu:26.04 / GCC 15)
+  # and the iccDEV Tool Tests workflow (clang-18) both meet the floor.
+  set(_iccdev_strict_capable FALSE)
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS "15.0")
+    set(_iccdev_strict_capable TRUE)
+  elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS "14.0")
+    set(_iccdev_strict_capable TRUE)
+  endif()
+  if(_iccdev_strict_capable)
+    add_compile_options(
+      -Werror=uninitialized
+      -Wshadow
+      -Wnull-dereference
+      -Wundef
+      -Wpointer-arith
+    )
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+      add_compile_options(-Wlogical-op)
+    endif()
+    message(STATUS "Linux: strict warnings ENABLED (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION})")
+  else()
+    message(STATUS "Linux: strict warnings DISABLED -- ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} below floor (GCC 15 / Clang 14). Base hardening still active. Upgrade to match CI diagnostics.")
+  endif()
+
+  # Opt-in: Effective C++ ruleset (currently ~3000 sites; multi-PR cleanup)
+  option(ENABLE_STRICT_EFFC "Enable -Weffc++ (Effective C++ guidelines)" OFF)
+  if(ENABLE_STRICT_EFFC)
+    add_compile_options(-Weffc++)
+  endif()
+
+  # Opt-in: float-to-double promotion warnings (~2000 sites; library-wide cleanup)
+  option(ENABLE_DOUBLE_PROMOTION "Enable -Wdouble-promotion" OFF)
+  if(ENABLE_DOUBLE_PROMOTION)
+    add_compile_options(-Wdouble-promotion)
+  endif()
 
   # Hardening: RELRO and BIND_NOW for executables
   add_link_options(-Wl,-z,relro,-z,now)
@@ -934,12 +1125,53 @@ elseif(UNIX AND NOT APPLE)
 
   message(STATUS "Linux build: Warning flags and security hardening applied.")
 
+elseif(EMSCRIPTEN)
+  message(STATUS "Detected platform: Emscripten (WebAssembly)")
+
+  # Emscripten uses its own toolchain -- no ELF hardening, no stack-protector.
+  # Warning flags only; linker/runtime flags are set by emcmake/emcc.
+  # Base set: works on any C++17-capable Emscripten toolchain.
+  add_compile_options(
+    -Wall
+    -Wextra
+    -Wformat
+    -Wformat-security
+    -Wimplicit-fallthrough
+    -Wsign-compare
+    -Wnon-virtual-dtor
+    -Wuninitialized
+  )
+
+  # Strict tier (Emscripten ships clang; gate on Clang 14+ for parity with Linux/macOS)
+  if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS "14.0")
+    add_compile_options(
+      -Werror=uninitialized
+      -Wshadow
+      -Wnull-dereference
+      -Wundef
+      -Wpointer-arith
+    )
+    message(STATUS "Emscripten: strict warnings ENABLED (${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION})")
+  else()
+    message(STATUS "Emscripten: strict warnings DISABLED -- ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION} below floor (Clang 14).")
+  endif()
+
+  message(STATUS "Emscripten build: Warning flags applied (no ELF hardening).")
+
 elseif(WIN32)
   message(STATUS "Detected platform: Windows")
 
   # Windows + MSVC flags
-  add_compile_options(/std:c++17 /D_WINDOWS /EHsc)
-  message(STATUS "Windows build: Compiler flags set for MSVC with C++17 and exceptions enabled.")
+  add_compile_options(/std:c++17 /D_WINDOWS /EHsc /GS)
+
+  # ASLR + DEP + CET shadow stacks
+  add_link_options(/DYNAMICBASE /NXCOMPAT)
+  # CET (Control-flow Enforcement Technology) requires VS 2019 16.7+
+  if(MSVC_VERSION GREATER_EQUAL 1927)
+    add_link_options(/CETCOMPAT)
+  endif()
+
+  message(STATUS "Windows build: Compiler flags set for MSVC with C++17, buffer security, and ASLR/DEP.")
 
 else()
   message(FATAL_ERROR "Unsupported or unknown platform. Aborting build configuration.")
@@ -950,17 +1182,6 @@ unset(IccProfLib2_LIBRARIES CACHE)
 unset(IccProfLib2_LIBRARY CACHE)
 unset(IccProfLib2_LIB CACHE)
 unset(IccProfLib2 CACHE)
-
-# ----------------------------------------------------------------------
-# Third-Party Dependencies (already found above — verify availability)
-# ----------------------------------------------------------------------
-message(STATUS "")
-message(STATUS "## Third Party Dependencies ##")
-message(STATUS "  LibXml2:        ${LIBXML2_LIBRARIES}")
-message(STATUS "  nlohmann_json:  found")
-message(STATUS "  TIFF:           ${TIFF_LIBRARIES}")
-message(STATUS "  PNG:            ${PNG_LIBRARIES}")
-message(STATUS "  JPEG:           ${JPEG_LIBRARIES}")
 
 message(STATUS "")
 #
@@ -999,16 +1220,15 @@ SET (CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_SOURCE_DIR}/Modules
 
 
 SET( TOP_SOURCE_DIR ../.. )
-INCLUDE_DIRECTORIES ( ${TOP_SOURCE_DIR}/IccProfLib/ )
-
-# external dependencies
-FIND_PROGRAM(CMAKE_AR_TMP NAMES ar)
+# NOTE: IccProfLib include now propagated via target_include_directories(PUBLIC) on IccProfLib2
 
 #
 # Core library
 #
-message(STATUS "## Project Configuration ##")
-message(STATUS "Adding subdirectory for IccProfLib.")
+if(VERBOSE_CONFIG)
+  message(STATUS "## Project Configuration ##")
+  message(STATUS "Adding subdirectory for IccProfLib.")
+endif()
 add_subdirectory(IccProfLib)
 
 # Set default link target for IccProfLib (matches build configuration)
@@ -1023,25 +1243,20 @@ ENDIF()
 # Optional external dependency: LibXML2
 #
 if(ENABLE_ICCXML)
-  message(STATUS "ICCXML support enabled")
-
-  if(USE_SYSTEM_LIBXML2)
-    find_package(LibXml2 REQUIRED)
-  else()
-    find_package(LibXml2 QUIET)
+  if(VERBOSE_CONFIG)
+    message(STATUS "ICCXML support enabled")
   endif()
 
+  # LibXml2 already found unconditionally above; resolve target vs legacy variables
   if(LibXml2_FOUND)
-    message(STATUS "Found LibXml2 via system or toolchain integration")
+    if(VERBOSE_CONFIG)
+      message(STATUS "Found LibXml2 via system or toolchain integration")
+    endif()
     set(HAVE_LIBXML2 TRUE)
 
     # Use imported CMake target if available
     if(TARGET LibXml2::LibXml2)
       set(LIBXML2_LIBRARIES LibXml2::LibXml2)
-    else()
-      # Legacy fallback (non-target based CMake find)
-      include_directories(${LIBXML2_INCLUDE_DIR})
-      set(LIBXML2_LIBRARIES ${LIBXML2_LIBRARIES})
     endif()
   else()
     message(WARNING "LibXml2 not found; falling back to internal IccXML/libxml2")
@@ -1056,7 +1271,9 @@ endif()
 #
 # XML library
 #
-message(STATUS "Adding subdirectory for IccXML.")
+if(VERBOSE_CONFIG)
+  message(STATUS "Adding subdirectory for IccXML.")
+endif()
 add_subdirectory(IccXML)
 
 # Set default link target for IccXML (matches build configuration)
@@ -1066,22 +1283,53 @@ ELSE()
   set(TARGET_LIB_ICCXML IccXML2-static CACHE INTERNAL "Link target for IccXML2")
 ENDIF()
 
-# Ensure IccXML headers are available globally
-include_directories(${TOP_SOURCE_DIR}/IccXML/IccLibXML/)
+# NOTE: IccXML and generated-header includes now propagated via
+# target_include_directories(PUBLIC) on IccProfLib2 and IccXML2 targets
 
 # Ensure generated version headers are available globally
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/IccProfLib)
 include_directories(${CMAKE_CURRENT_BINARY_DIR}/IccXML)
 
+#
+# JSON library (parallel to IccXML, uses nlohmann/json)
+#
+IF(ENABLE_ICCJSON)
+  find_package(nlohmann_json REQUIRED)
+  if(VERBOSE_CONFIG)
+    message(STATUS "nlohmann_json          : ${nlohmann_json_DIR} (version: ${nlohmann_json_VERSION})")
+  endif()
+
+  # ICC_JSON_ORDERED: use nlohmann::ordered_json for deterministic key order.
+  # Default OFF (unordered is faster). Enable for reproducible output / CI logs.
+  IF(ICC_JSON_ORDERED)
+    add_definitions(-DICC_JSON_ORDERED=1)
+    message(STATUS "IccJSON key order      : ordered (deterministic)")
+  ELSE()
+    message(STATUS "IccJSON key order      : unordered (faster)")
+  ENDIF()
+
+  message(STATUS "Adding subdirectory for IccJSON.")
+  add_subdirectory(IccJSON)
+
+  # Set default link target for IccJSON (matches build configuration)
+  IF(ENABLE_SHARED_LIBS)
+    set(TARGET_LIB_ICCJSON IccJSON2 CACHE INTERNAL "Link target for IccJSON2")
+  ELSE()
+    set(TARGET_LIB_ICCJSON IccJSON2-static CACHE INTERNAL "Link target for IccJSON2")
+  ENDIF()
+
+  # Ensure IccJSON headers are available globally
+  include_directories(${TOP_SOURCE_DIR}/IccJSON/IccLibJSON/)
+  include_directories(${CMAKE_CURRENT_BINARY_DIR}/IccJSON)
+ENDIF(ENABLE_ICCJSON)
+
 # Diagnostic: Output current linker flags
+if(VERBOSE_CONFIG)
+  message(STATUS "CMAKE_EXE_LINKER_FLAGS = ${CMAKE_EXE_LINKER_FLAGS}")
+  message(STATUS "CMAKE_SHARED_LINKER_FLAGS = ${CMAKE_SHARED_LINKER_FLAGS}")
+  message(STATUS "CMAKE_MODULE_LINKER_FLAGS = ${CMAKE_MODULE_LINKER_FLAGS}")
+endif()
 
-message(STATUS "CMAKE_EXE_LINKER_FLAGS = ${CMAKE_EXE_LINKER_FLAGS}")
-message(STATUS "CMAKE_SHARED_LINKER_FLAGS = ${CMAKE_SHARED_LINKER_FLAGS}")
-message(STATUS "CMAKE_MODULE_LINKER_FLAGS = ${CMAKE_MODULE_LINKER_FLAGS}")
-
-
-# nlohmann_json already found above
-message(STATUS "nlohmann_json library found: ${nlohmann_json_DIR}")
 
  # Function to add and log subdirectories
 function(add_tool_subdirectory TOOL_SUBDIRECTORY)
@@ -1090,38 +1338,42 @@ function(add_tool_subdirectory TOOL_SUBDIRECTORY)
     message(STATUS "Successfully added Subdirectory: ${TOOL_SUBDIRECTORY}")
 endfunction()
 
-IF(ENABLE_TOOLS)
-  # Verify nlohmann_json is configured properly
-  IF(nlohmann_json_DIR)
-    MESSAGE(STATUS "Found nlohmann JSON library at: ${nlohmann_json_DIR}")
+function(iccdev_fixup_msvc_compile_pdb TARGET_NAME)
+  if(MSVC AND TARGET "${TARGET_NAME}")
+    set_target_properties(${TARGET_NAME} PROPERTIES
+      COMPILE_PDB_NAME "${TARGET_NAME}"
+      COMPILE_PDB_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/compile-pdb/$<CONFIG>"
+    )
+  endif()
+endfunction()
 
-    # Use nlohmann_json include directory
-    include_directories(${nlohmann_json_DIR})
-  ELSE()
-    MESSAGE(WARNING "nlohmann JSON library not found. Skipping..")
-    RETURN() # Exit script for tools if dependency is not found
+IF(ENABLE_TOOLS)
+  # Verify nlohmann_json is configured properly (required for JSON tools)
+  IF(ENABLE_ICCJSON)
+    IF(NOT nlohmann_json_DIR)
+      MESSAGE(WARNING "nlohmann JSON library not found but ENABLE_ICCJSON is ON. JSON tools will be skipped.")
+    ENDIF()
   ENDIF()
 
   # Add XML-related tools
-  message(STATUS "Adding Subdirectory IccFromXml.")
   ADD_SUBDIRECTORY(Tools/IccFromXml)
-  message(STATUS "Adding Subdirectory IccToXml.")
   ADD_SUBDIRECTORY(Tools/IccToXml)
+
+  # Add JSON-related tools
+  IF(ENABLE_ICCJSON AND TARGET_LIB_ICCJSON)
+    message(STATUS "Adding Subdirectory IccFromJson.")
+    ADD_SUBDIRECTORY(Tools/IccFromJson)
+    message(STATUS "Adding Subdirectory IccToJson.")
+    ADD_SUBDIRECTORY(Tools/IccToJson)
+  ENDIF()
   message(STATUS "Adding Subdirectory IccJpegDump.")
   ADD_SUBDIRECTORY(Tools/IccJpegDump)
-  message(STATUS "Adding Subdirectory IccApplyNamedCmm.")
   ADD_SUBDIRECTORY(Tools/IccApplyNamedCmm)
-  message(STATUS "Adding Subdirectory IccDumpProfile.")
   ADD_SUBDIRECTORY(Tools/IccDumpProfile)
-  message(STATUS "Adding Subdirectory IccDumpRoundTrip.")
   ADD_SUBDIRECTORY(Tools/IccRoundTrip)
-  message(STATUS "Adding Subdirectory IccFromCube.")
   ADD_SUBDIRECTORY(Tools/IccFromCube)
-  message(STATUS "Adding Subdirectory IccV5DspObsToV4Dsp.")
   ADD_SUBDIRECTORY(Tools/IccV5DspObsToV4Dsp)
-  message(STATUS "Adding Subdirectory IccApplyToLink.")
   ADD_SUBDIRECTORY(Tools/IccApplyToLink)
-  message(STATUS "Adding Subdirectory IccApplySearch.")
   ADD_SUBDIRECTORY(Tools/IccApplySearch)
 
   # Ensure IccXML-dependent tools are built after IccXML library (safety net)
@@ -1130,6 +1382,16 @@ IF(ENABLE_TOOLS)
   ENDIF()
   IF(TARGET iccToXml AND TARGET ${TARGET_LIB_ICCXML})
     ADD_DEPENDENCIES(iccToXml ${TARGET_LIB_ICCXML})
+  ENDIF()
+
+  # Ensure IccJSON-dependent tools are built after IccJSON library (safety net)
+  IF(ENABLE_ICCJSON)
+    IF(TARGET iccFromJson AND TARGET ${TARGET_LIB_ICCJSON})
+      ADD_DEPENDENCIES(iccFromJson ${TARGET_LIB_ICCJSON})
+    ENDIF()
+    IF(TARGET iccToJson AND TARGET ${TARGET_LIB_ICCJSON})
+      ADD_DEPENDENCIES(iccToJson ${TARGET_LIB_ICCJSON})
+    ENDIF()
   ENDIF()
 
 
@@ -1143,40 +1405,81 @@ if(PNG_FOUND)
 else()
   message(FATAL_ERROR " PNG not found. Please install libpng-dev or install via vcpkg.")
 endif()
-message(STATUS "Adding Subdirectory IccPngDump.")
+if(VERBOSE_CONFIG)
+  message(STATUS "Adding Subdirectory IccPngDump.")
+endif()
 ADD_SUBDIRECTORY(Tools/IccPngDump)
 
 
-    message(STATUS "Adding Subdirectory IccDEVCmm.")
+    if(VERBOSE_CONFIG)
+      message(STATUS "Adding Subdirectory IccDEVCmm.")
+    endif()
     ADD_SUBDIRECTORY(Tools/IccDEVCmm)
+    if(WIN32)
+      if(VERBOSE_CONFIG)
+        message(STATUS "Adding Subdirectory IccIisIsapi.")
+      endif()
+      ADD_SUBDIRECTORY(Tools/IccIisIsapi)
+    endif()
 
 
-  # TIFF already found above
+  # TIFF already found above; scope includes to targets, not globally
   if (TIFF_FOUND)
-    include_directories(${TIFF_INCLUDE_DIR})
-    message(STATUS "TIFF library found: ${TIFF_LIBRARIES}")
+    # TIFF includes are now scoped to each tool via target_include_directories
 
     # Add TIFF-dependent tools
-    message(STATUS "Adding Subdirectory IccApplyProfiles.")
+    if(VERBOSE_CONFIG)
+      message(STATUS "Adding Subdirectory IccApplyProfiles.")
+    endif()
     ADD_SUBDIRECTORY(Tools/IccApplyProfiles)
-    message(STATUS "Adding subdirectory IccSpecSepToTiff.")
+    if(VERBOSE_CONFIG)
+      message(STATUS "Adding subdirectory IccSpecSepToTiff.")
+    endif()
     ADD_SUBDIRECTORY(Tools/IccSpecSepToTiff)
-    message(STATUS "Adding Subdirectory IccTiffDump.")
+    if(VERBOSE_CONFIG)
+      message(STATUS "Adding Subdirectory IccTiffDump.")
+    endif()
     ADD_SUBDIRECTORY(Tools/IccTiffDump)
   else()
     message(FATAL_ERROR "TIFF library not found. Please install libtiff-dev.")
   endif()
 
-  # wxWidgets GUI tool (optional)
-  find_package(wxWidgets QUIET COMPONENTS core base)
-  if(wxWidgets_FOUND)
-    include(${wxWidgets_USE_FILE})
-    message(STATUS "wxWidgets found: ${wxWidgets_LIBRARIES}")
-    message(STATUS "Adding Subdirectory wxProfileDump.")
-    ADD_SUBDIRECTORY(Tools/wxProfileDump)
+  # wxWidgets GUI tool (optional, controlled by ENABLE_WXWIDGETS)
+  if(ENABLE_WXWIDGETS)
+    find_package(wxWidgets QUIET COMPONENTS core base)
+    if(wxWidgets_FOUND)
+      include(${wxWidgets_USE_FILE})
+      message(STATUS "wxWidgets found: ${wxWidgets_LIBRARIES}")
+      message(STATUS "Adding Subdirectory wxProfileDump.")
+      ADD_SUBDIRECTORY(Tools/wxProfileDump)
+    else()
+      message(STATUS "wxWidgets not found - skipping wxProfileDump.")
+    endif()
   else()
-    message(STATUS "wxWidgets not found - skipping wxProfileDump.")
+    message(STATUS "wxWidgets disabled by ENABLE_WXWIDGETS=OFF - skipping wxProfileDump.")
   endif()
+
+  foreach(_iccdev_tool_target
+      iccFromXml
+      iccToXml
+      iccJpegDump
+      iccApplyNamedCmm
+      iccDumpProfile
+      iccRoundTrip
+      iccFromCube
+      iccV5DspObsToV4Dsp
+      iccApplyToLink
+      iccApplySearch
+      iccPngDump
+      iccIisIsapi
+      iccIisIsapiSmoke
+      iccApplyProfiles
+      iccSpecSepToTiff
+      iccTiffDump
+      iccDumpProfileGui
+  )
+    iccdev_fixup_msvc_compile_pdb(${_iccdev_tool_target})
+  endforeach()
 
 ENDIF(ENABLE_TOOLS)
 
@@ -1222,7 +1525,7 @@ ADD_CUSTOM_TARGET( dist-bin
 ADD_CUSTOM_TARGET( dist-bin2
     DEPENDS check
     COMMAND mkdir -p ${PROJECT_NAME}-${CMAKE_SYSTEM_NAME}${ARCH}-${${PROJECT_UP_NAME}_VERSION}/Testing/
-    COMMAND cp -av ${CMAKE_SOURCE_DIR}/../../Testing/IccApplyNamedCmm ${PROJECT_NAME}-${CMAKE_SYSTEM_NAME}${ARCH}-${${PROJECT_UP_NAME}_VERSION}/Testing/
+    COMMAND cp -av ${CMAKE_SOURCE_DIR}/../../Testing/iccApplyNamedCmm ${PROJECT_NAME}-${CMAKE_SYSTEM_NAME}${ARCH}-${${PROJECT_UP_NAME}_VERSION}/Testing/
     COMMAND cp -av ${CMAKE_SOURCE_DIR}/../../Testing/iccApplyProfiles ${PROJECT_NAME}-${CMAKE_SYSTEM_NAME}${ARCH}-${${PROJECT_UP_NAME}_VERSION}/Testing/
     COMMAND cp -av ${CMAKE_SOURCE_DIR}/../../Testing/iccApplySearch ${PROJECT_NAME}-${CMAKE_SYSTEM_NAME}${ARCH}-${${PROJECT_UP_NAME}_VERSION}/Testing/
     COMMAND cp -av ${CMAKE_SOURCE_DIR}/../../Testing/iccApplyToLink ${PROJECT_NAME}-${CMAKE_SYSTEM_NAME}${ARCH}-${${PROJECT_UP_NAME}_VERSION}/Testing/
@@ -1250,15 +1553,37 @@ ADD_CUSTOM_TARGET( dist-bin2
 #
 
 #cmake settings for use by find_package
+include(CMakePackageConfigHelpers)
+
 CONFIGURE_FILE (
                 "${CMAKE_CURRENT_SOURCE_DIR}/${PROJECT_NAME}Config.cmake.in"
                 "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
                 @ONLY
         )
 
+write_basic_package_version_file(
+  "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake"
+  VERSION "${REFICCMAX_MAJOR_VERSION}.${REFICCMAX_MINOR_VERSION}.${REFICCMAX_MICRO_VERSION}"
+  COMPATIBILITY SameMajorVersion
+)
+
 IF(ENABLE_INSTALL_RIM)
   INSTALL ( FILES
                 "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}Config.cmake"
+                "${CMAKE_CURRENT_BINARY_DIR}/${PROJECT_NAME}ConfigVersion.cmake"
                 DESTINATION ${CMAKE_MODULES_INSTALL_DIR} COMPONENT dev
         )
+
+  # Install exported targets file alongside the Config
+  INSTALL( EXPORT RefIccMAXTargets
+           NAMESPACE RefIccMAX::
+           DESTINATION ${CMAKE_MODULES_INSTALL_DIR}
+           COMPONENT dev
+  )
 ENDIF(ENABLE_INSTALL_RIM)
+
+# Build-tree export; allows find_package() from build dir without install
+export( EXPORT RefIccMAXTargets
+        NAMESPACE RefIccMAX::
+        FILE "${CMAKE_CURRENT_BINARY_DIR}/RefIccMAXTargets.cmake"
+)

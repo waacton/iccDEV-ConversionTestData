@@ -574,7 +574,18 @@ bool CIccTagDict::Read(icUInt32Number size, CIccIO *pIO)
   if (reclen!=16 && reclen!=24 && reclen!=32)
     return false;
 
-  if ((headerSize + (size_t)count*reclen) > (size_t)size)
+  // 64-bit widened bounds check. On wasm32 (size_t == u32) the product
+  // `count * reclen` can otherwise wrap, bypassing the guard and letting
+  // the subsequent calloc under-allocate while the Read loop writes
+  // `count` records into it.
+  icUInt64Number tableBytes =
+      static_cast<icUInt64Number>(count) * reclen;
+  if (static_cast<icUInt64Number>(headerSize) + tableBytes > size)
+    return false;
+
+  // Defensive upper cap: no legitimate dict tag has 2^20 entries.
+  static const icUInt32Number kMaxDictEntries = 0x100000;
+  if (count > kMaxDictEntries)
     return false;
 
   icDictRecordPos *pos = (icDictRecordPos*)calloc(count, sizeof(icDictRecordPos));
@@ -630,7 +641,7 @@ bool CIccTagDict::Read(icUInt32Number size, CIccIO *pIO)
         ptr.ptr->SetValue(str);
       }
       else {
-        if (pos[i].posName.offset + pos[i].posName.size >size ||
+        if (pos[i].posName.size > size || pos[i].posName.offset > size - pos[i].posName.size ||
             !pos[i].posName.size) {
           free(pos);
           free(buf);
@@ -675,7 +686,7 @@ bool CIccTagDict::Read(icUInt32Number size, CIccIO *pIO)
         ptr.ptr->SetValue(str);
       }
       else {
-        if (pos[i].posValue.offset + pos[i].posValue.size >size ||
+        if (pos[i].posValue.size > size || pos[i].posValue.offset > size - pos[i].posValue.size ||
             (pos[i].posValue.size&1)) {
             free(pos);
             free(buf);
@@ -715,7 +726,7 @@ bool CIccTagDict::Read(icUInt32Number size, CIccIO *pIO)
 
     //Get NameLocalized
     if (pos[i].posNameLocalized.offset) {
-      if (pos[i].posNameLocalized.offset + pos[i].posNameLocalized.size > size ||
+      if (pos[i].posNameLocalized.size > size || pos[i].posNameLocalized.offset > size - pos[i].posNameLocalized.size ||
           pos[i].posNameLocalized.size < sizeof(icSignature)) {
         free(pos);
         free(buf);
@@ -766,7 +777,7 @@ bool CIccTagDict::Read(icUInt32Number size, CIccIO *pIO)
 
     //Get ValueLocalized
     if (pos[i].posValueLocalized.offset) {
-      if (pos[i].posValueLocalized.offset + pos[i].posValueLocalized.size > size ||
+      if (pos[i].posValueLocalized.size > size || pos[i].posValueLocalized.offset > size - pos[i].posValueLocalized.size ||
         pos[i].posValueLocalized.size < sizeof(icSignature)) {
           free(pos);
           free(buf);
@@ -1107,7 +1118,7 @@ CIccDictEntry* CIccTagDict::Get(const icUnicodeChar *szName) const
 {
   std::wstring sName;
   while(*szName)
-    sName += *szName;
+    sName += *szName++;
 
   return Get(sName);
 }
@@ -1182,7 +1193,7 @@ std::wstring CIccTagDict::GetValue(const icUnicodeChar *szName, bool *bIsSet) co
 {
   std::wstring sName;
   while(*szName)
-    sName += *szName;
+    sName += *szName++;
 
   return GetValue(sName, bIsSet);
 }
@@ -1247,7 +1258,7 @@ CIccTagMultiLocalizedUnicode* CIccTagDict::GetNameLocalized(const icUnicodeChar 
 {
   std::wstring sName;
   while(*szName)
-    sName += *szName;
+    sName += *szName++;
 
   return GetNameLocalized(sName);
 }
@@ -1314,7 +1325,7 @@ CIccTagMultiLocalizedUnicode* CIccTagDict::GetValueLocalized(const icUnicodeChar
 {
   std::wstring sName;
   while(*szName)
-    sName += *szName;
+    sName += *szName++;
 
   return GetValueLocalized(sName);
 }
@@ -1388,7 +1399,7 @@ bool CIccTagDict::Remove(const icUnicodeChar *szName)
 {
   std::wstring sName;
   while(*szName)
-    sName += *szName;
+    sName += *szName++;
 
   return Remove(sName);
 
@@ -1460,7 +1471,7 @@ bool CIccTagDict::Set(const icUnicodeChar *szName, const icUnicodeChar *szValue)
 {
   std::wstring sName;
   while(*szName)
-    sName += *szName;
+    sName += *szName++;
 
   std::wstring sValue;
 

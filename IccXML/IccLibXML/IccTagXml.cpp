@@ -71,6 +71,7 @@
 #include "IccStructFactory.h"
 #include "IccArrayFactory.h"
 #include "IccConvertUTF.h"
+#include <new>     /* std::nothrow */
 #include <cstring> /* C strings strcpy, memcpy ... */
 #include <set>
 #include <map>
@@ -227,18 +228,22 @@ static bool icXmlParseTextString(xmlNode *pNode, std::string &parseStr, std::str
         const icChar *filename = icXmlAttrValue(pNode, "File");
 
         // file exists
-        if (filename[0]) {        
-          CIccIO *file = IccOpenFileIO(filename, "rb");        
+        if (filename && filename[0]) {        
+          CIccIO *file = IccXmlSafeOpenFileIO(filename, "rb");        
           if (!file){          
             parseStr += "Error! - File '";
             parseStr += filename;
-            parseStr +="' not found.\n";
+            parseStr += "' could not be opened (file includes may be disabled or path rejected as unsafe).\n";
             delete file;
             return false;
           }
 
-          size_t fileLength = file->GetLength();
-          char *ansiStr = (char *)malloc(fileLength+1);
+          icUInt32Number fileLength;
+          if (!icXmlValidateFileCount(file->GetLength(), fileLength, parseStr, filename)) {
+            delete file;
+            return false;
+          }
+          char *ansiStr = (char *)malloc((size_t)fileLength + 1);
 
           if (!ansiStr) {
             perror("Memory Error");
@@ -256,7 +261,8 @@ static bool icXmlParseTextString(xmlNode *pNode, std::string &parseStr, std::str
             free(ansiStr);
             delete file;             
             return false;
-          }   
+          }
+          ansiStr[fileLength] = '\0';
           // convert utf8 (xml format) to ansi (icc format)
           if (bConvert)
             icUtf8ToAnsi(buf, ansiStr);
@@ -309,8 +315,8 @@ bool CIccTagXmlZipUtf8Text::ParseXml(xmlNode *pNode, std::string &parseStr)
     if (pNode->type==XML_ELEMENT_NODE) {
       if (!icXmlStrCmp(pNode->name, "HexCompressedData") && pNode->children && pNode->children->content) {
         CIccUInt8Array buf;
-        if (!buf.SetSize(icXmlGetHexDataSize((const icChar*)pNode->children->content) ||
-            icXmlGetHexData(buf.GetBuf(), (const icChar*)pNode->children->content, buf.GetSize())!=buf.GetSize()))
+        if (!buf.SetSize(icXmlGetHexDataSize((const icChar*)pNode->children->content)) ||
+            icXmlGetHexData(buf.GetBuf(), (const icChar*)pNode->children->content, buf.GetSize())!=buf.GetSize())
           return false;
   
         AllocBuffer(buf.GetSize());
@@ -336,8 +342,8 @@ bool CIccTagXmlZipXml::ParseXml(xmlNode *pNode, std::string &parseStr)
     if (pNode->type==XML_ELEMENT_NODE) {
       if (!icXmlStrCmp(pNode->name, "HexCompressedData") && pNode->children && pNode->children->content) {
         CIccUInt8Array buf;
-        if (!buf.SetSize(icXmlGetHexDataSize((const icChar*)pNode->children->content) ||
-          icXmlGetHexData(buf.GetBuf(), (const icChar*)pNode->children->content, buf.GetSize())!=buf.GetSize()))
+        if (!buf.SetSize(icXmlGetHexDataSize((const icChar*)pNode->children->content)) ||
+          icXmlGetHexData(buf.GetBuf(), (const icChar*)pNode->children->content, buf.GetSize())!=buf.GetSize())
           return false;
 
         AllocBuffer(buf.GetSize());
@@ -427,19 +433,28 @@ bool CIccTagXmlTextDescription::ParseXml(xmlNode *pNode, std::string &parseStr)
   const icChar *filename = icXmlAttrValue(pNode, "File");
 
   // file exists
-  if (filename[0]) {
-    CIccIO *file = IccOpenFileIO(filename, "rb");
+  if (filename && filename[0]) {
+    CIccIO *file = IccXmlSafeOpenFileIO(filename, "rb");
 
     if (!file){
       parseStr += "Error! - File '";
       parseStr += filename;
-      parseStr +="' not found.\n";
+      parseStr += "' could not be opened (file includes may be disabled or path rejected as unsafe).\n";
       delete file;
       return false;
     }
 
-    size_t fileLength = file->GetLength();
-    char *buf = (char *)malloc(fileLength);
+    icUInt32Number fileLength;
+    if (!icXmlValidateFileCount(file->GetLength(), fileLength, parseStr, filename)) {
+      delete file;
+      return false;
+    }
+    // +1 for the NUL terminator. icUtf8ToAnsi(buf) and CIccUTF16String(buf)
+    // both treat `buf` as a C-string and walk it with strlen-like logic;
+    // without the extra byte plus the explicit terminator below, those
+    // functions read past the allocation until they happen to find a
+    // zero byte in adjacent heap.
+    char *buf = (char *)malloc((size_t)fileLength + 1);
 
     if (!buf) {
       perror("Memory Error");
@@ -449,6 +464,7 @@ bool CIccTagXmlTextDescription::ParseXml(xmlNode *pNode, std::string &parseStr)
       delete file;
       return false;
     }
+    buf[fileLength] = '\0';
 
     if (file->ReadLine(buf, fileLength)!=fileLength) {
       parseStr += "Error while reading file '";
@@ -457,7 +473,8 @@ bool CIccTagXmlTextDescription::ParseXml(xmlNode *pNode, std::string &parseStr)
       free(buf);
       delete file;             
       return false;
-    }   
+    }
+    buf[fileLength] = '\0';
 
     // set ANSII string
     std::string ansiStr;    
@@ -490,10 +507,16 @@ bool CIccTagXmlTextDescription::ParseXml(xmlNode *pNode, std::string &parseStr)
     else
       m_uzUnicodeText[0] = 0;
 
-    // Set ScriptCode
-    m_nScriptCode=0;
-    m_nScriptSize = (icUInt8Number) fileLength + 1;  
-    memcpy(m_szScriptText, buf, 67);
+    // Set ScriptCode (m_szScriptText is a fixed 67-byte field per ICC v2
+    // textDescriptionType; clamp source read to buf size to avoid OOB read,
+    // and clamp m_nScriptSize before the icUInt8Number narrowing.)
+    m_nScriptCode = 0;
+    icUInt32Number nScriptCopy = fileLength < 67 ? fileLength : 67;
+    icUInt32Number nScriptSize = nScriptCopy < 255 ? nScriptCopy + 1 : 255;
+    m_nScriptSize = (icUInt8Number)nScriptSize;
+    memset(m_szScriptText, 0, sizeof(m_szScriptText));
+    if (nScriptCopy)
+      memcpy(m_szScriptText, buf, nScriptCopy);
 
     delete file;
   }
@@ -1219,7 +1242,7 @@ bool CIccTagXmlSparseMatrixArray::ParseXml(xmlNode *pNode, std::string &parseStr
 
               CIccFloatArray data;
               data.ParseTextArray(pChild);
-              if (data.GetSize()==nRows*nCols) {
+              if (data.GetSize()==(icUInt32Number)nRows*nCols) {
                 if (!mtx.FillFromFullMatrix(data.GetBuf()))
                   parseStr += "Exceeded maximum number of sparse matrix entries\n";
               }
@@ -1523,12 +1546,12 @@ bool CIccTagXmlFloatNum<T, A, Tsig>::ParseXml(xmlNode *pNode, std::string &parse
 
   A a;
 
-  if (filename[0]) {
-    CIccIO *file = IccOpenFileIO(filename, "rb");
+  if (filename && filename[0]) {
+    CIccIO *file = IccXmlSafeOpenFileIO(filename, "rb");
     if (!file){
       parseStr += "Error! - File '";
       parseStr += filename;
-      parseStr +="' not found.\n";
+      parseStr += "' could not be opened (file includes may be disabled or path rejected as unsafe).\n";
       delete file;
       return false;
     }
@@ -1536,15 +1559,20 @@ bool CIccTagXmlFloatNum<T, A, Tsig>::ParseXml(xmlNode *pNode, std::string &parse
     size_t len = file->GetLength();
 
     if (!stricmp(icXmlAttrValue(pNode, "Format", "text"), "text")) {
-      char *fbuf = (char*)malloc(len+1);
-      fbuf[len]=0;
+      icUInt32Number nLen;
+      if (!icXmlValidateFileCount(len, nLen, parseStr, filename)) {
+        delete file;
+        return false;
+      }
+      char *fbuf = (char*)malloc((size_t)nLen + 1);
       if (!fbuf) {
         parseStr += "Memory error!\n";
         delete file;
         return false;
       }
+      fbuf[nLen] = 0;
 
-      if (file->Read8(fbuf, len)!=len) {
+      if (file->Read8(fbuf, nLen)!=nLen) {
         parseStr += "Read error of (";
         parseStr += filename;
         parseStr += ")!\n";
@@ -1564,7 +1592,11 @@ bool CIccTagXmlFloatNum<T, A, Tsig>::ParseXml(xmlNode *pNode, std::string &parse
       free(fbuf);
     }
     else if (Tsig==icSigFloat16ArrayType && sizeof(T)==sizeof(icFloat16Number)) {
-      icUInt32Number n = len/sizeof(icFloat16Number);
+      icUInt32Number n;
+      if (!icXmlValidateFileCount(len / sizeof(icFloat16Number), n, parseStr, filename)) {
+        delete file;
+        return false;
+      }
       this->SetSize(n);
       if (file->Read16(&this->m_Num[0], n)!=n) {
         delete file;
@@ -1574,7 +1606,11 @@ bool CIccTagXmlFloatNum<T, A, Tsig>::ParseXml(xmlNode *pNode, std::string &parse
       return true;
     }
     else if (Tsig==icSigFloat16ArrayType && sizeof(T)==sizeof(icFloat32Number)) {
-      icUInt32Number n = (icUInt32Number)(len/sizeof(icFloat32Number));
+      icUInt32Number n;
+      if (!icXmlValidateFileCount(len / sizeof(icFloat32Number), n, parseStr, filename)) {
+        delete file;
+        return false;
+      }
       this->SetSize(n);
       if (file->ReadFloat16Float(&this->m_Num[0], n)!=n) {
         delete file;
@@ -1584,7 +1620,11 @@ bool CIccTagXmlFloatNum<T, A, Tsig>::ParseXml(xmlNode *pNode, std::string &parse
       return true;
     }
     else if (Tsig==icSigFloat32ArrayType && sizeof(T)==sizeof(icFloat32Number)) {
-      icUInt32Number n =  (icUInt32Number)(len/sizeof(icFloat32Number));
+      icUInt32Number n;
+      if (!icXmlValidateFileCount(len / sizeof(icFloat32Number), n, parseStr, filename)) {
+        delete file;
+        return false;
+      }
       this->SetSize(n);
       if (file->ReadFloat32Float(&this->m_Num[0], n)!=n) {
         delete file;
@@ -1594,7 +1634,11 @@ bool CIccTagXmlFloatNum<T, A, Tsig>::ParseXml(xmlNode *pNode, std::string &parse
       return true;
     }
     else if (Tsig==icSigFloat64ArrayType && sizeof(T)==sizeof(icFloat64Number)) {
-      icUInt32Number n =  (icUInt32Number)(len/sizeof(icFloat64Number));
+      icUInt32Number n;
+      if (!icXmlValidateFileCount(len / sizeof(icFloat64Number), n, parseStr, filename)) {
+        delete file;
+        return false;
+      }
       this->SetSize(n);
       if (file->Read64(&this->m_Num[0], n)!=n) {
         delete file;
@@ -1914,7 +1958,7 @@ bool CIccTagXmlColorantTable::ParseXml(xmlNode *pNode, std::string & /*parseStr*
             xmlAttr *b = icXmlFindAttr(pNode, "Channel3");
 
             if (name && L && a && b) {
-              strncpy(m_pData[i].name, icUtf8ToAnsi(str, name), sizeof(m_pData[i].name));
+              strncpy(m_pData[i].name, icUtf8ToAnsi(str, name), sizeof(m_pData[i].name)-1);
               m_pData[i].name[sizeof(m_pData[i].name)-1]=0;
 
               icFloatNumber lab[3];
@@ -2518,7 +2562,7 @@ bool CIccTagXmlResponseCurveSet16::ParseXml(xmlNode *pNode, std::string & /*pars
         if (pChild->type == XML_ELEMENT_NODE && !icXmlStrCmp(pChild->name, "ChannelResponses")) {
           CIccResponse16List *pResponseList = curves.GetResponseList(i);
           icXYZNumber *pXYZ = curves.GetXYZ(i);
-          icResponse16Number response;
+          icResponse16Number response{};  // zero-init (.reserved is conditionally set; ICC spec requires it be 0)
 
           const icChar *szX = icXmlAttrValue(pChild, "X");
           const icChar *szY = icXmlAttrValue(pChild, "Y");
@@ -2588,7 +2632,7 @@ bool CIccTagXmlCurve::ToXml(std::string &xml, icConvertType nType, std::string b
         xml += "\n";
         xml += blanks;  
       }
-      snprintf(buf, bufSize, " %3u", (int)(m_Curve[i] * 255.0 + 0.5));
+      snprintf(buf, bufSize, " %3d", (int)(m_Curve[i] * 255.0 + 0.5));
       xml += buf;
     }
     xml += "\n";
@@ -2601,7 +2645,7 @@ bool CIccTagXmlCurve::ToXml(std::string &xml, icConvertType nType, std::string b
         xml += "\n";
         xml += blanks + " ";
       }
-      snprintf(buf, bufSize, " %5u", (int)(m_Curve[i] * 65535.0 + 0.5));
+      snprintf(buf, bufSize, " %5d", (int)(m_Curve[i] * 65535.0 + 0.5));
       xml += buf;
     }
     xml += "\n";
@@ -2643,12 +2687,12 @@ bool CIccTagXmlCurve::ParseXml(xmlNode *pNode, icConvertType nType, std::string 
     const char *filename = icXmlAttrValue(pCurveNode, "File");
 
     // file exists
-    if (filename[0]) {
-      CIccIO *file = IccOpenFileIO(filename, "rb");
+    if (filename && filename[0]) {
+      CIccIO *file = IccXmlSafeOpenFileIO(filename, "rb");
       if (!file){
         parseStr += "Error! - File '";
         parseStr += filename;
-        parseStr +="' not found.\n";
+        parseStr += "' could not be opened (file includes may be disabled or path rejected as unsafe).\n";
         delete file;
         return false;
       }
@@ -2657,28 +2701,45 @@ bool CIccTagXmlCurve::ParseXml(xmlNode *pNode, icConvertType nType, std::string 
 
       // format is text
       if (!strcmp(format, "text")) {
-        size_t num = file->GetLength();
-        char *buf = (char *) new char[num];
-
-        if (!buf) {          
-          perror("Memory Error");
+        icUInt32Number num;
+        if (!icXmlValidateFileCount(file->GetLength(), num, parseStr, filename)) {
+          delete file;
+          return false;
+        }
+        // Shared ceiling: prevents num+1 from wrapping size_t and caps
+        // downstream ParseTextArrayNum memory use. See IccUtilXml.h.
+        if (num > icXmlMaxTextFileBytes) {
           parseStr += "'";
           parseStr += filename;
-          parseStr += "' may not be a valid text file.\n";
-          delete [] buf;
+          parseStr += "' exceeds 256 MB limit.\n";
+          delete file;
+          return false;
+        }
+        // +1 and explicit NUL; use nothrow so the immediate
+        // !buf check below actually fires on OOM.
+        char *buf = new(std::nothrow) char[num + 1];
+
+        if (!buf) {
+          parseStr += "Out of memory allocating ";
+          parseStr += std::to_string(num + 1);
+          parseStr += " bytes for text buffer from '";
+          parseStr += filename;
+          parseStr += "'.\n";
           delete file;
           return false;
         }
 
-        if (file->Read8(buf, num) !=num) {
-          perror("Read-File Error");
-          parseStr += "'";
+        if (file->Read8(buf, num) != num) {
+          parseStr += "Read error: could not read ";
+          parseStr += std::to_string(num);
+          parseStr += " bytes from '";
           parseStr += filename;
-          parseStr += "' may not be a valid text file.\n";
+          parseStr += "'.\n";
           delete [] buf;
-          delete file;             
+          delete file;
           return false;
-        }         
+        }
+        buf[num] = '\0';  // NUL-terminate for ParseText downstream
 
         // lut8type
         if (nType == icConvert8Bit) {
@@ -2794,10 +2855,15 @@ bool CIccTagXmlCurve::ParseXml(xmlNode *pNode, icConvertType nType, std::string 
         bool little_endian = !strcmp(order, "little");    
 
         if (nType == icConvert8Bit){
-          size_t num = file->GetLength();
+          icUInt32Number num;
           icUInt8Number value;
 
-          SetSize( (icUInt32Number)num);
+          if (!icXmlValidateFileCount(file->GetLength(), num, parseStr, filename)) {
+            delete file;
+            return false;
+          }
+
+          SetSize(num);
           icFloatNumber *dst =  GetData(0);
           icUInt32Number i;
           for (i=0; i<num; i++) {
@@ -2815,13 +2881,18 @@ bool CIccTagXmlCurve::ParseXml(xmlNode *pNode, icConvertType nType, std::string 
           return true;
         }        
         else if (nType == icConvert16Bit || nType == icConvertVariable){
-          size_t num = file->GetLength() / sizeof(icUInt16Number);
+          icUInt32Number num;
           icUInt16Number value;
           icUInt8Number *ptr = (icUInt8Number*)&value;
 
-          SetSize((icUInt32Number)num);
+          if (!icXmlValidateFileCount(file->GetLength() / sizeof(icUInt16Number), num, parseStr, filename)) {
+            delete file;
+            return false;
+          }
+
+          SetSize(num);
           icFloatNumber *dst = GetData(0);
-          size_t i;
+          icUInt32Number i;
           for (i=0; i<num; i++) {
             if (!file->Read16(&value)) {  //this assumes data is big endian
               perror("Read-File Error");
@@ -2846,14 +2917,19 @@ bool CIccTagXmlCurve::ParseXml(xmlNode *pNode, icConvertType nType, std::string 
           return true;
         }
         else if (nType == icConvertFloat) {
-          size_t num = file->GetLength()/sizeof(icFloat32Number);
+          icUInt32Number num;
           icFloat32Number value;
           icUInt8Number *ptr = (icUInt8Number*)&value;
 
-          SetSize((icUInt32Number)num);
+          if (!icXmlValidateFileCount(file->GetLength() / sizeof(icFloat32Number), num, parseStr, filename)) {
+            delete file;
+            return false;
+          }
+
+          SetSize(num);
           icFloatNumber *dst = GetData(0);
 
-          size_t i;
+          icUInt32Number i;
           for (i=0; i<num; i++) {
             if (!file->ReadFloat32Float(&value)) { //assumes data is big endian
               perror("Read-File Error");
@@ -3478,14 +3554,14 @@ CIccCLUT *icCLutFromXml(xmlNode *pNode, int nIn, int nOut, icConvertType nType, 
       filename = icXmlAttrValue(table, "File");
     }
 
-    if (filename[0]) {
-      CIccIO *file = IccOpenFileIO(filename, "rb");
+    if (filename && filename[0]) {
+      CIccIO *file = IccXmlSafeOpenFileIO(filename, "rb");
 
       if (!file) {
         // added error message
         parseStr += "Error! - File '";
         parseStr += filename;
-        parseStr +="' not found.\n";
+        parseStr += "' could not be opened (file includes may be disabled or path rejected as unsafe).\n";
         delete pCLUT;
         return NULL;
       }
@@ -3493,7 +3569,12 @@ CIccCLUT *icCLutFromXml(xmlNode *pNode, int nIn, int nOut, icConvertType nType, 
       const char *format = icXmlAttrValue(table, "Format");
 
       if (!strcmp(format, "text")) {
-        size_t num = file->GetLength();
+        icUInt32Number num;
+        if (!icXmlValidateFileCount(file->GetLength(), num, parseStr, filename)) {
+          delete file;
+          delete pCLUT;
+          return NULL;
+        }
         char *buf = (char *)malloc(num);
 
         if (!buf) {  
@@ -3545,7 +3626,7 @@ CIccCLUT *icCLutFromXml(xmlNode *pNode, int nIn, int nOut, icConvertType nType, 
             return NULL;
           }
 
-          if (data.GetSize()!=pCLUT->NumPoints()*pCLUT->GetOutputChannels()) {     
+          if (data.GetSize()!=(size_t)pCLUT->NumPoints()*pCLUT->GetOutputChannels()) {     
             parseStr += "Error! - Number of entries in file '";
             parseStr += filename;
             parseStr += "'is not equal to the size of the CLUT Table.\n";  
@@ -3664,9 +3745,10 @@ CIccCLUT *icCLutFromXml(xmlNode *pNode, int nIn, int nOut, icConvertType nType, 
 
         if (nType == icConvert8Bit){
           size_t num = file->GetLength();
+          icUInt32Number count;
           icUInt8Number value;
           // if number of entries in file is not equal to size of CLUT table, flag as error
-          if (num!=pCLUT->NumPoints()*pCLUT->GetOutputChannels()) {
+          if (num!=(size_t)pCLUT->NumPoints()*pCLUT->GetOutputChannels()) {
             parseStr += "Error! - Number of entries in file '";
             parseStr += filename;
             parseStr += "'is not equal to the size of the CLUT Table.\n";  
@@ -3676,9 +3758,16 @@ CIccCLUT *icCLutFromXml(xmlNode *pNode, int nIn, int nOut, icConvertType nType, 
             delete pCLUT;
             return NULL;
           }
+
+          if (!icXmlValidateFileCount(num, count, parseStr, filename)) {
+            delete file;
+            delete pCLUT;
+            return NULL;
+          }
+
           icFloatNumber *dst = pCLUT->GetData(0);
           icUInt32Number i;
-          for (i=0; i<num; i++) {
+          for (i=0; i<count; i++) {
             if (!file->Read8(&value)) {
               perror("Read-File Error");
               parseStr += "'";
@@ -3693,10 +3782,11 @@ CIccCLUT *icCLutFromXml(xmlNode *pNode, int nIn, int nOut, icConvertType nType, 
         }
         else if (nType == icConvert16Bit){
           size_t num = file->GetLength() / sizeof(icUInt16Number);
+          icUInt32Number count;
           icUInt16Number value;
           icUInt8Number *ptr = (icUInt8Number*)&value;
 
-          if (num<pCLUT->NumPoints()*pCLUT->GetOutputChannels()) {
+          if (num!=(size_t)pCLUT->NumPoints()*pCLUT->GetOutputChannels()) {
             parseStr += "Error! - Number of entries in file '";
             parseStr += filename;
             parseStr += "'is not equal to the size of the CLUT Table.\n";
@@ -3706,10 +3796,17 @@ CIccCLUT *icCLutFromXml(xmlNode *pNode, int nIn, int nOut, icConvertType nType, 
             delete pCLUT;
             return NULL;
           }
+
+          if (!icXmlValidateFileCount(num, count, parseStr, filename)) {
+            delete file;
+            delete pCLUT;
+            return NULL;
+          }
+
           icFloatNumber *dst = pCLUT->GetData(0);
 
           icUInt32Number i;
-          for (i=0; i<num; i++) {
+          for (i=0; i<count; i++) {
             if (!file->Read16(&value)) {  //this assumes data is big endian
               perror("Read-File Error");
               parseStr += "'";
@@ -3733,10 +3830,11 @@ CIccCLUT *icCLutFromXml(xmlNode *pNode, int nIn, int nOut, icConvertType nType, 
         }
         else if (nType == icConvertFloat){
           size_t num = file->GetLength()/sizeof(icFloat32Number);
+          icUInt32Number count;
           icFloat32Number value;
           icUInt8Number *ptr = (icUInt8Number*)&value;
 
-          if (num<pCLUT->NumPoints()*pCLUT->GetOutputChannels()) {
+          if (num!=(size_t)pCLUT->NumPoints()*pCLUT->GetOutputChannels()) {
             parseStr += "Error! - Number of entries in file '";
             parseStr += filename;
             parseStr += "'is not equal to the size of the CLUT Table.\n";  
@@ -3746,10 +3844,17 @@ CIccCLUT *icCLutFromXml(xmlNode *pNode, int nIn, int nOut, icConvertType nType, 
             delete pCLUT;
             return NULL;
           }
+
+          if (!icXmlValidateFileCount(num, count, parseStr, filename)) {
+            delete file;
+            delete pCLUT;
+            return NULL;
+          }
+
           icFloatNumber *dst = pCLUT->GetData(0);
 
           icUInt32Number i;
-          for (i=0; i<num; i++) {
+          for (i=0; i<count; i++) {
             if (!file->ReadFloat32Float(&value)) {  //this assumes data is big endian
               perror("Read-File Error");
               parseStr += "'";
@@ -4412,9 +4517,9 @@ bool CIccTagXmlDict::ParseXml(xmlNode *pNode, std::string & /*parseStr*/)
           for (pText = pChild->children; pText && pText->type != XML_TEXT_NODE && pText->type != XML_CDATA_SECTION_NODE; pText = pText->next);
 
           if (pText) {
-            CIccUTF16String str((const char*)pText->content);
+            CIccUTF16String localStr((const char*)pText->content);
 
-            pTag->SetText(str.c_str(), (icLanguageCode)(lc>>16), (icCountryCode)(lc & 0xffff));
+            pTag->SetText(localStr.c_str(), (icLanguageCode)(lc>>16), (icCountryCode)(lc & 0xffff));
           }
           else {
             pTag->SetText("");
@@ -4435,8 +4540,8 @@ bool CIccTagXmlDict::ParseXml(xmlNode *pNode, std::string & /*parseStr*/)
           for (pText = pChild->children; pText && pText->type != XML_TEXT_NODE && pText->type != XML_CDATA_SECTION_NODE; pText = pText->next);
 
           if (pText) {
-            CIccUTF16String str((const char*)pText->content);
-            pTag->SetText(str.c_str(), (icLanguageCode)(lc>>16), (icCountryCode)(lc & 0xffff));
+            CIccUTF16String localStr((const char*)pText->content);
+            pTag->SetText(localStr.c_str(), (icLanguageCode)(lc>>16), (icCountryCode)(lc & 0xffff));
           }
           else {
             pTag->SetText("");
@@ -4665,7 +4770,7 @@ bool CIccTagXmlStruct::ParseTag(xmlNode *pNode, std::string &parseStr)
       icTagTypeSignature sigType = icGetTypeNameTagSig((const icChar*)pTypeNode->name);
 
       if (sigType == icSigUnknownType) {
-        xmlAttr *attr = icXmlFindAttr(pTypeNode, "type");
+        attr = icXmlFindAttr(pTypeNode, "type");
         sigType = (icTagTypeSignature)icGetSigVal((icChar*)icXmlAttrValue(attr));
       }
 
@@ -4683,7 +4788,15 @@ bool CIccTagXmlStruct::ParseTag(xmlNode *pNode, std::string &parseStr)
           if ((attr = icXmlFindAttr(pTypeNode, "reserved"))) {
             sscanf(icXmlAttrValue(attr), "%u", &pTag->m_nReserved);
           }
-          AttachElem(sigTag, pTag);
+          if (!AttachElem(sigTag, pTag)) {
+            parseStr += "Unable to Attach \"";
+            parseStr += (const char*)pTypeNode->name;
+            parseStr += "\" (";
+            parseStr += nodeName;
+            parseStr += ") Tag\n";
+            delete pTag;
+            return false;
+          }
         }
         else {
           parseStr += "Unable to Parse \"";
@@ -4691,6 +4804,7 @@ bool CIccTagXmlStruct::ParseTag(xmlNode *pNode, std::string &parseStr)
           parseStr += "\" (";
           parseStr += nodeName;
           parseStr += ") Tag\n";
+          delete pTag;
           return false;
         }
       }
@@ -4700,6 +4814,7 @@ bool CIccTagXmlStruct::ParseTag(xmlNode *pNode, std::string &parseStr)
         parseStr += "\" (";
         parseStr += nodeName;
         parseStr += ") Tag\n";
+        delete pTag;
         return false;
       }
     }
@@ -4709,7 +4824,7 @@ bool CIccTagXmlStruct::ParseTag(xmlNode *pNode, std::string &parseStr)
     icTagTypeSignature sigType = icGetTypeNameTagSig(nodeName.c_str());
 
     if (sigType == icSigUnknownType) {
-      xmlAttr *attr = icXmlFindAttr(pNode, "type");
+      attr = icXmlFindAttr(pNode, "type");
       sigType = (icTagTypeSignature)icGetSigVal((icChar*)icXmlAttrValue(attr));
     }
 
@@ -4728,12 +4843,17 @@ bool CIccTagXmlStruct::ParseTag(xmlNode *pNode, std::string &parseStr)
           sscanf(icXmlAttrValue(attr), "%u", &pTag->m_nReserved);
         }
 
+        bool bAttached = false;
         for (xmlNode *tagSigNode = pNode->children; tagSigNode; tagSigNode = tagSigNode->next) {
           if (tagSigNode->type == XML_ELEMENT_NODE && !icXmlStrCmp(tagSigNode->name, "TagSignature")
             && tagSigNode->children != NULL) {
             sigTag = (icTagSignature)icGetSigVal((const icChar*)tagSigNode->children->content);
-            AttachElem(sigTag, pTag);
+            if (AttachElem(sigTag, pTag))
+              bAttached = true;
           }
+        }
+        if (!bAttached) {
+          delete pTag;
         }
       }
       else {
@@ -4742,6 +4862,7 @@ bool CIccTagXmlStruct::ParseTag(xmlNode *pNode, std::string &parseStr)
         parseStr += "\" (";
         parseStr += nodeName;
         parseStr += ") Tag\n";
+        delete pTag;
         return false;
       }
     }
@@ -4751,6 +4872,7 @@ bool CIccTagXmlStruct::ParseTag(xmlNode *pNode, std::string &parseStr)
       parseStr += "\" (";
       parseStr += nodeName;
       parseStr += ") Tag\n";
+      delete pTag;
       return false;
     }
   }
@@ -4948,7 +5070,7 @@ bool CIccTagXmlArray::ParseXml(xmlNode *pNode, std::string &parseStr)
       icTagTypeSignature sigType = icGetTypeNameTagSig ((icChar*) tagNode->name);
 
       if (sigType==icSigUnknownType){
-        xmlAttr *attr = icXmlFindAttr(pNode, "type");
+        attr = icXmlFindAttr(pNode, "type");
         sigType = (icTagTypeSignature)icGetSigVal((icChar*) icXmlAttrValue(attr));
       }
 
@@ -4973,6 +5095,7 @@ bool CIccTagXmlArray::ParseXml(xmlNode *pNode, std::string &parseStr)
             parseStr += "Tag Array Index ";
             parseStr += n;
             parseStr += " already filled!\n";
+            delete pTag;
             return false;
           }
         }
@@ -4980,8 +5103,12 @@ bool CIccTagXmlArray::ParseXml(xmlNode *pNode, std::string &parseStr)
           parseStr += "Unable to Parse xml node named  \"";
           parseStr += (icChar*)tagNode->name;
           parseStr += "\"\n";
+          delete pTag;
           return false;
         }
+      }
+      else {
+        delete pTag;
       }
       n++;
     }
@@ -5078,7 +5205,7 @@ bool CIccTagXmlGamutBoundaryDesc::ParseXml(xmlNode *pNode, std::string &parseStr
     if (!m_PCSValues)
       return false;
 
-    memcpy(m_PCSValues, vals.GetBuf(), m_NumberOfVertices * m_nPCSChannels*sizeof(icFloatNumber));
+    memcpy(m_PCSValues, vals.GetBuf(), (size_t)m_NumberOfVertices * m_nPCSChannels*sizeof(icFloatNumber));
   }
   else {
     parseStr += "Cannot find PCSValues\n";
@@ -5113,7 +5240,7 @@ bool CIccTagXmlGamutBoundaryDesc::ParseXml(xmlNode *pNode, std::string &parseStr
     if (!m_DeviceValues)
       return false;
 
-    memcpy(m_DeviceValues, vals.GetBuf(), m_NumberOfVertices * m_nDeviceChannels * sizeof(icFloatNumber));
+    memcpy(m_DeviceValues, vals.GetBuf(), (size_t)m_NumberOfVertices * m_nDeviceChannels * sizeof(icFloatNumber));
   }
   else if (!m_PCSValues)
     m_NumberOfVertices = 0;
@@ -5214,21 +5341,27 @@ bool CIccTagXmlEmbeddedHeightImage::ParseXml(xmlNode *pNode, std::string &parseS
     }
 
     // file exists
-    if (filename[0]) {
-      CIccIO *file = IccOpenFileIO(filename, "rb");
+    if (filename && filename[0]) {
+      CIccIO *file = IccXmlSafeOpenFileIO(filename, "rb");
       if (!file) {
         parseStr += "Error! - File '";
         parseStr += filename;
-        parseStr += "' not found.\n";
+        parseStr += "' could not be opened (file includes may be disabled or path rejected as unsafe).\n";
         delete file;
         return false;
       }
 
       size_t num = file->GetLength();
+      icUInt32Number count;
 
-      SetSize((icUInt32Number)num);
+      if (!icXmlValidateFileCount(num, count, parseStr, filename)) {
+        delete file;
+        return false;
+      }
+
+      SetSize(count);
       icUInt8Number *dst = GetData(0);
-      if (file->Read8(dst, num)!=num) {
+      if (file->Read8(dst, count)!=count) {
         perror("Read-File Error");
         parseStr += "'";
         parseStr += filename;
@@ -5309,21 +5442,27 @@ bool CIccTagXmlEmbeddedNormalImage::ParseXml(xmlNode *pNode, std::string &parseS
     }
 
     // file exists
-    if (filename[0]) {
-      CIccIO *file = IccOpenFileIO(filename, "rb");
+    if (filename && filename[0]) {
+      CIccIO *file = IccXmlSafeOpenFileIO(filename, "rb");
       if (!file) {
         parseStr += "Error! - File '";
         parseStr += filename;
-        parseStr += "' not found.\n";
+        parseStr += "' could not be opened (file includes may be disabled or path rejected as unsafe).\n";
         delete file;
         return false;
       }
 
       size_t num = file->GetLength();
+      icUInt32Number count;
 
-      SetSize((icUInt32Number)num);
+      if (!icXmlValidateFileCount(num, count, parseStr, filename)) {
+        delete file;
+        return false;
+      }
+
+      SetSize(count);
       icUInt8Number *dst = GetData(0);
-      if (file->Read8(dst, num) != num) {
+      if (file->Read8(dst, count) != count) {
         perror("Read-File Error");
         parseStr += "'";
         parseStr += filename;

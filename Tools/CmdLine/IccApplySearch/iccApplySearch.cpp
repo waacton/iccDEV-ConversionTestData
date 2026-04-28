@@ -262,6 +262,7 @@ int main(int argc, const char* argv[])
       if (cfgApply.m_srcFile.empty()) {
         if (!cfgData.fromJson(cfg["colorData"])) {
           printf("Unable to parse colorData configuration from '%s'\n", argv[2]);
+          return -1;
         }
       }
       else {
@@ -272,10 +273,36 @@ int main(int argc, const char* argv[])
         }
       }
     }
+    else if (cfgApply.m_srcType == icCfgIt8) {
+      cfgData.m_srcSpace = cfgApply.m_srcSpace;
+      if (cfgApply.m_srcFile.empty() || !cfgData.fromIt8(cfgApply.m_srcFile.c_str())) {
+        printf("Unable to parse IT8 data file '%s'\n", cfgApply.m_srcFile.c_str());
+        return -1;
+      }
+    }
+    else if (cfgApply.m_srcType == icCfgLegacy) {
+      if (!cfgData.fromLegacy(cfgApply.m_srcFile.c_str())) {
+        printf("Unable to parse legacy data file '%s'\n", cfgApply.m_srcFile.c_str());
+        return -1;
+      }
+    }
   }
   else {
+    std::string exportFile;
+    bool bExportData = false;
+
     argv++;
     argc--;
+
+    if (argc > 2 &&
+      (!stricmp(argv[0], "-exportcfg") ||
+        !stricmp(argv[0], "-exportcfganddata"))) {
+      exportFile = argv[1];
+      if (!stricmp(argv[0], "-exportcfganddata"))
+        bExportData = true;
+      argv += 2;
+      argc -= 2;
+    }
 
     if (argc > 1 && !stricmp(argv[0], "-debugcalc")) {
       cfgApply.m_debugCalc = true;
@@ -302,6 +329,39 @@ int main(int argc, const char* argv[])
       printf("Unable to parse legacy data file '%s'\n", cfgApply.m_srcFile.c_str());
       return -1;
     }
+
+    if (!exportFile.empty()) {
+      FILE* f = fopen(exportFile.c_str(), "wt");
+      if (f) {
+        json cfgJson;
+        json applyJson, profilesJson;
+
+        cfgApply.toJson(applyJson);
+
+        if (bExportData) {
+          json dataJson;
+          cfgData.toJson(dataJson);
+          cfgJson["colorData"] = dataJson;
+
+          applyJson["srcFile"] = nullptr;
+          applyJson["srcType"] = "colorData";
+        }
+
+        cfgJson["dataFiles"] = applyJson;
+
+        cfgSearchApply.toJson(profilesJson);
+        cfgJson["searchApply"] = profilesJson;
+
+
+        std::string jsonText = cfgJson.dump(1);
+        fwrite(jsonText.c_str(), 1, jsonText.size(), f);
+        fclose(f);
+      }
+      else {
+        printf("Unable to export config file '%s'\n", exportFile.c_str());
+      }
+    }
+
   }
 
   if (cfgSearchApply.m_profiles.size() != 2 && cfgSearchApply.m_profiles.size() != 3) {

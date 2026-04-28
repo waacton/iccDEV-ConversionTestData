@@ -1,130 +1,106 @@
 # Copilot Instructions for iccDEV
 
-## Project Overview
-iccDEV is an open source set of libraries and tools for interaction, manipulation, and application of ICC-based color management profiles. The project is maintained by the International Color Consortium (ICC) and uses the BSD 3-Clause License.
+Use this as the short cross-cutting guide. Path-specific details auto-load from
+`.github/instructions/*.instructions.md`; prefer those over duplicating content
+here.
 
-## Code Style Guidelines
+## Path-Specific Instructions
 
-### Indentation and Formatting
-- Use **2 space indentation**, no tabs
-- Use **K&R brace style**
-- Aim for zero compiler warnings and static analysis warnings across all platforms
+| Pattern | File | Purpose |
+|---------|------|---------|
+| `.github/workflows/**` | `instructions/workflow-governance.instructions.md` | Shell hardening, sanitizer, injection prevention |
+| `.github/scripts/**` | `instructions/sanitizer-scripts.instructions.md` | sanitize-sed.sh / sanitize.ps1 API |
+| `Build/**` | `instructions/build-system.instructions.md` | CMake, platform notes, WASM/LTO |
+| `IccProfLib/**`, `IccXML/**`, `Tools/**`, `IccJSON/**` | `instructions/icc-library-code.instructions.md` | Parser hardening, sanitizer compatibility |
+| `Testing/**` | `instructions/testing.instructions.md` | Test scripts, profile dirs, regression flow |
+| `IccProfLib/icProfileHeader.h` | `instructions/icc-specification.instructions.md` | ICC header/tags/color-space rules |
+| `ports/**` | `instructions/vcpkg-port.instructions.md` | vcpkg overlay port and CI |
+| `Tools/Winnt/IccIisIsapi/**` | `Tools/Winnt/IccIisIsapi/isapi-instructions.md` | IIS ISAPI setup and hardening |
 
-### Naming Conventions
-- Prefix class/struct members with `m_` (e.g., `m_variableName`)
-- No uniform convention for general variables - match nearby code
-- Use descriptive names
+## Current JSON/Config Regression Gate
 
-### Code Organization
-- Multiple classes per file, grouped by functionality
-- Use header guards in all header files
-- Minimize pollution of the `std` namespace
-- Const correctness: make inputs const when possible, class functions const when appropriate
+Branch: `bisect-60bbb8c-json`
 
-### Language Features
-- **Error handling**: Use manual return values, NOT exceptions (this is the existing pattern)
-- **Containers**: Prefer STL containers, but the codebase historically uses raw pointers
-- **Templates**: Currently minimal use. Ensure new templates are readable
-- **Namespaces**: Not currently using namespaces (work in progress)
-- **C++ Standard**: Requires C++17 or higher
+Latest pushed commits:
+- `4ffcba5 fix: restore JSON config round-trips`
+- `0eca71b fix: harden JSON parser regressions`
 
-### Comments
-- No consistent style exists - match nearby code
-- Don't over-comment obvious code
+Regression gate:
 
-## Build System
-
-### Primary Build Tool
-- CMake-based build system located in `Build/Cmake/`
-- Supports multiple platforms: Linux, macOS, Windows
-
-## Required libraries
-
-| Platform          | Libraries                                                                 |
-|-------------------|---------------------------------------------------------------------------|
-| **macOS**         | libpng, jpeg, libtiff, libxml2, wxwidgets, nlohmann-json                  |
-| **Windows**       | libpng, libjpeg-turbo, libtiff, libxml2, wxwidgets, nlohmann-json         |
-| **Linux (Ubuntu)** | libpng-dev, libjpeg-dev, libtiff-dev, libxml2-dev, wxwidgets*, nlohmann-json |
-
-\* **Note:** On Ubuntu, `wxwidgets` is installed via distribution-specific development packages  
-(e.g. `libwxgtk3.2-dev`). Refer to the `apt install` command below for the exact package names.
-
-### Build Commands
-#### Ubuntu
-
-```
-export CXX=clang++
-git clone https://github.com/InternationalColorConsortium/iccdev.git iccdev
-cd iccdev/Build
-sudo apt install -y libpng-dev libjpeg-dev libtiff-dev libwxgtk3.2-dev libwxgtk-{media,webview}3.2-dev wx-common wx3.2-headers curl git make cmake clang{,-tools} libxml2{,-dev} nlohmann-json3-dev build-essential
-cmake Cmake
-make -j"$(nproc)"
-
+```bash
+cd Build && cmake --build . --target iccFromJson iccToJson \
+  iccApplySearch iccApplyNamedCmm iccApplyProfiles -j"$(nproc)"
+cd ..
+ICCDEV_TOOLS_DIR=$PWD/Build/Tools ICCDEV_TESTING_DIR=$PWD/Testing \
+  LD_LIBRARY_PATH=$PWD/Build/IccProfLib:$PWD/Build/IccXML:$PWD/Build/IccJSON \
+  .github/scripts/iccdev-json-parser-regression-tests.sh
+ICCDEV_TOOLS_DIR=$PWD/Build/Tools ICCDEV_TESTING_DIR=$PWD/Testing \
+  LD_LIBRARY_PATH=$PWD/Build/IccProfLib:$PWD/Build/IccXML:$PWD/Build/IccJSON \
+  .github/scripts/iccdev-json-cfg-tests.sh
 ```
 
-#### macOS
+Parser rule: fail closed. Reject short arrays, non-numeric required values,
+failed nested `ParseJson()`, bad struct members, malformed fixed-size arrays, and
+stale reset/fromJson state.
 
-```
-export CXX=clang++
-brew install libpng nlohmann-json libxml2 wxwidgets libtiff jpeg
-git clone https://github.com/InternationalColorConsortium/iccdev.git iccdev
-cd iccdev
-cmake -G "Xcode" Build/Cmake
-xcodebuild -project RefIccMAX.xcodeproj
-open RefIccMAX.xcodeproj
-```
+## Build and Test
 
-#### Windows MSVC
+```bash
+# Standard Linux build
+cd Build && cmake Cmake -DCMAKE_BUILD_TYPE=Debug -DENABLE_TOOLS=ON
+cmake --build . -j"$(nproc)"
 
-```
-git clone https://github.com/InternationalColorConsortium/iccdev.git iccdev
-cd iccdev
-vcpkg integrate install
-vcpkg install
-cmake --preset vs2022-x64 -B . -S Build/Cmake
-cmake --build . -- /m /maxcpucount
+# Generate and validate profiles
+Testing/CreateAllProfiles.sh
+Testing/RunTests.sh
 ```
 
-## Testing
-- Test scripts located in `Testing/` directory
-- Run tests using `Testing/RunTests.sh` (Unix) or `Testing/RunTests.bat` (Windows)
-- Profile creation: `Testing/CreateAllProfiles.sh` (Unix) or `Testing/CreateAllProfiles.bat` (Windows)
-- Test various ICC profile operations and transformations
+Sanitizer bug-hunt build:
 
-## Security Practices
-- Report security issues via GitHub Security Advisory
-- All new source files must begin with ICC Copyright notice and BSD 3-Clause License
-- Follow secure coding practices
-- Validate all inputs, especially when processing ICC profiles
+```bash
+cd Build
+rm -f CMakeCache.txt
+CC=clang CXX=clang++ \
+  CXXFLAGS="-fsanitize=address,undefined,integer,float-divide-by-zero,float-cast-overflow -fno-omit-frame-pointer -g -O1" \
+  LDFLAGS="-fsanitize=address,undefined,integer,float-divide-by-zero,float-cast-overflow" \
+  cmake Cmake -DCMAKE_BUILD_TYPE=Debug -DENABLE_TOOLS=ON
+cmake --build . -j"$(nproc)"
+```
 
-## Legal and Licensing
+`-fsanitize=undefined` does not catch unsigned overflow or float divide-by-zero;
+use `integer,float-divide-by-zero,float-cast-overflow` for bug hunting.
 
-### Copyright Notice
-All new source files must begin with the ICC Copyright notice and include or reference the BSD 3-Clause "New" or "Revised" License.
+## Code Style and Safety
 
-### Contributor License Agreement
-Contributors must sign the ICC Contributor License Agreement (CLA) before code can be merged.
+- 2-space C++ indent, K&R braces, no tabs.
+- Member prefix `m_`; match nearby naming and ownership patterns.
+- Error handling uses return values, not exceptions.
+- New files need ICC copyright + BSD 3-Clause header unless generated.
+- Validate all file-controlled sizes, offsets, counts, and loop bounds.
+- Bounds check pattern: `if (size > limit || offset > limit - size)`.
+- Exit 1-127 is graceful failure, not a crash; exit 128+ is signal/crash.
+- Keep all generated agent files ASCII and verify with `file`.
 
-## Pull Request Process
-1. Create a topic branch: `feature/<your-feature>` or `bugfix/<your-fix>`
-2. Make focused changes related to the topic
-3. Ensure code compiles and tests pass
-4. Follow existing code style and conventions
-5. Create pull request with clear description
-6. Address review feedback
-7. Requires Committer approval before merge
+## CI and Regression Rules
 
-## Project Structure
-- `IccProfLib/` - Core ICC profile library
-- `IccXML/` - XML handling for ICC profiles
-- `Tools/` - Command-line tools for profile manipulation
-- `Build/` - Build system files (CMake, Xcode)
-- `Testing/` - Test files and scripts
-- `docs/` - Documentation
+- Every workflow `run:` block starts with `set -euo pipefail`, clears git
+  credentials, unsets `GITHUB_TOKEN`, and sources `sanitize-sed.sh` or fallback.
+- Do not put `${{ }}` expressions directly in shell code; pass through `env:`.
+- Sanitize all `GITHUB_STEP_SUMMARY` writes.
+- Add regression coverage in the nearest script/workflow before claiming a fix.
+- For JSON/config bugs, prefer `.github/scripts/iccdev-json-parser-regression-tests.sh`
+  and `.github/scripts/iccdev-json-cfg-tests.sh`.
+- For standard observer XML/JSON alias compatibility, run
+  `.github/scripts/iccdev-stdobserver-regression-tests.sh`.
 
-## Key Considerations
-- This is an older codebase - consistency is valued over perfection
-- Match existing patterns when adding new code
-- Focus on cross-platform compatibility (Linux, macOS, Windows)
-- Performance matters for profile processing
-- Maintain compatibility with ICC specifications
+## Prompts
+
+| Task | Prompt |
+|------|--------|
+| Bisect regression | `.github/prompts/bisect-regression.prompt.md` |
+| Reproduce security issue | `.github/prompts/reproduce-security-issue.prompt.md` |
+| File issue | `.github/prompts/file-security-issue.prompt.md` |
+| Code review hunting | `.github/prompts/code-review-hunting.prompt.md` |
+| Build/test/coverage | `.github/prompts/build-and-test.prompt.md` |
+| Workflow governance audit | `.github/prompts/audit-workflow-governance.prompt.md` |
+| vcpkg debug | `.github/prompts/vcpkg-port-debug.prompt.md` |

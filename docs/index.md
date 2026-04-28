@@ -6,6 +6,12 @@ and application of ICC based color management profiles based on the
 [ICC profile specification](http://www.color.org/icc_specs2.xalter) and 
 [iccMAX profile specification](http://www.color.org/iccmax.xalter).
 
+## Documentation
+
+- [Build](build.md)
+- [Install](install.md)
+- [CodeQL Security Analysis](codeql.md)
+
 ## Features Overview
 
 Within the project are several libraries and tools as follows:
@@ -20,6 +26,13 @@ Within the project are several libraries and tools as follows:
     extension library (IccLibXML) which provides the ability to interact with the
     objects defined by IccProfLib using an XML representation thus allowing ICC
     profiles to be expressed as or created from text based XML files.
+
+  * IccLibJSON - The IccLibJSON library provides native JSON serialization for
+    ICC and iccMAX profiles. It extends IccProfLib with the ability to convert
+    profiles to and from a human-readable JSON representation, enabling
+    inspection and editing with any JSON-capable tooling. A
+    [JSON Schema](icc-profile.schema.json) is provided for inline validation.
+    See [IccJSON guide](iccjson.md) for full documentation.
 
 
 ### Tools based upon these libraries
@@ -39,6 +52,16 @@ Within the project are several libraries and tools as follows:
     the FromXML() and ToXML() member functions defined in IccLibXML. The
     IccFromXML tool provides a simple direct method to create and manipulate
     ICC and iccMAX profiles.
+
+  * IccToJson is a cross platform command line tool that converts a binary ICC or iccMAX
+    profile to a JSON representation. The resulting JSON file can be inspected or edited
+    and then converted back to a binary profile using IccFromJson.
+
+  * IccFromJson is a cross platform command line tool that creates a binary ICC or iccMAX
+    profile from a JSON file. A [JSON Schema](icc-profile.schema.json) is provided that
+    describes the format and enables inline validation in supporting editors.
+    See the [IccJSON guide](iccjson.md) for full documentation on the JSON format and
+    worked examples.
 
   * IccApplyNamedCmm is a cross platform command line tool that allows a
     sequence of ICC profile formats and/or iccMAX profile formats to be applied to colors
@@ -175,11 +198,17 @@ abridged spectral encoding is provided.
 
 ## Installation
 
-Install iccDEV using the Homebrew or NPM:
+See [Install](install.md) for Docker, Homebrew, NPM, and NixOS quickstart.
 
-```
-brew install iccdev
-npm install iccdev
-```
+[Build on Windows, macOS, Linux](build.md)  . 
+[Bisecting Regressions](bisect.md)
 
-[Build on Windows, macOS, Linux](BUILD.md)
+## Examples
+
+The [`examples/hello-iccdev/`](../examples/hello-iccdev/) directory contains a
+minimal standalone example that links IccProfLib2 and IccXML2, prints library
+versions, and round-trips an ICC profile header to XML. When IccJSON2 (and
+nlohmann-json) is available, the example also demonstrates JSON round-tripping
+via `CIccProfileJson::ToJson()` and `ParseJson()`. It supports three discovery
+paths: installed package (including vcpkg), build-tree export, and manual
+discovery.

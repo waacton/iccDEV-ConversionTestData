@@ -91,7 +91,7 @@ typedef enum {
   icElemInterpTetra,
 } icElemInterp;
 
-class CIccTagMultiProcessElement;
+class ICCPROFLIB_API CIccTagMultiProcessElement;
 class CIccMultiProcessElement;
 
 class CIccApplyTagMpe;
@@ -128,6 +128,7 @@ typedef CIccApplyMpeList::iterator CIccApplyMpeIter;
 class IIccExtensionMpe
 {
 public:
+  virtual ~IIccExtensionMpe() {}
   virtual const char *GetExtClassName()=0;
 };
 
@@ -222,7 +223,7 @@ protected:
 * Purpose: Base Class for Process Elements
 *****************************************************************************
 */
-class CIccMpeUnknown : public CIccMultiProcessElement
+class ICCPROFLIB_API CIccMpeUnknown : public CIccMultiProcessElement
 {
 public:
   CIccMpeUnknown();
@@ -350,7 +351,7 @@ class IIccProfileConnectionConditions;
 * Purpose: A general purpose processing tag 
 *****************************************************************************
 */
-class CIccTagMultiProcessElement : public CIccTag
+class ICCPROFLIB_API CIccTagMultiProcessElement : public CIccTag
 {
 public:
   CIccTagMultiProcessElement(icUInt16Number nInputChannels=0, icUInt16Number nOutputChannels=0);

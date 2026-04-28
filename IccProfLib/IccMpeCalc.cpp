@@ -924,7 +924,10 @@ public:
       return false;
     icFloatNumber *s = &(*os.pStack)[ss-tn];
     for (j=0; j<n; j++) {
-      s[j] /= s[j+n];
+      if (s[j+n] != 0.0f)
+        s[j] /= s[j+n];
+      else
+        s[j] = 0.0f;
     }
     OsShrinkArgs(n);
     return true;
@@ -1049,8 +1052,15 @@ public:
       return false;
     icFloatNumber *s = &(*os.pStack)[ss-tn];
     icFloatNumber p = s[n];
-    for (j=0; j<n; j++) {
-      s[j] = s[j] / p;
+    if (p != 0.0f) {
+      for (j=0; j<n; j++) {
+        s[j] = s[j] / p;
+      }
+    }
+    else {
+      for (j=0; j<n; j++) {
+        s[j] = 0.0f;
+      }
     }
     OsShrinkArgs(1);
     return true;
@@ -3689,8 +3699,14 @@ bool CIccCalculatorFunc::InitSelectOp(SIccCalcOp *ops, icUInt32Number nOps)
 * 
 * Return: 
 ******************************************************************************/
-bool CIccCalculatorFunc::ApplySequence(CIccApplyMpeCalculator *pApply, icUInt32Number nOps, SIccCalcOp *ops) const
+bool CIccCalculatorFunc::ApplySequence(CIccApplyMpeCalculator *pApply, icUInt32Number nOps, SIccCalcOp *ops, int nDepth) const
 {
+  // Cap recursion depth. A crafted Calc tag with nested if/else/select
+  // opcodes can otherwise exhaust the C++ stack (~30K frames on wasm's
+  // 1 MB default stack). 64 levels is well beyond any legitimate profile.
+  static const int kMaxCalcRecursionDepth = 64;
+  if (nDepth > kMaxCalcRecursionDepth)
+    return false;
   SIccCalcOp *op;
   SIccOpState os;
 
@@ -3726,7 +3742,7 @@ bool CIccCalculatorFunc::ApplySequence(CIccApplyMpeCalculator *pApply, icUInt32N
           if (os.idx+1 + dataSize >= nOps)
             return false;
 
-          if (!ApplySequence(pApply, dataSize, &ops[os.idx+1]))
+          if (!ApplySequence(pApply, dataSize, &ops[os.idx+1], nDepth + 1))
             return false;
         }
         else {
@@ -3738,7 +3754,7 @@ bool CIccCalculatorFunc::ApplySequence(CIccApplyMpeCalculator *pApply, icUInt32N
           if (newOpIndex + nNewOps > nOps)  // now add and test the real limit
             return false;
 
-          if (!ApplySequence(pApply, nNewOps, &ops[os.idx+1 + op->data.size]))
+          if (!ApplySequence(pApply, nNewOps, &ops[os.idx+1 + op->data.size], nDepth + 1))
             return false;
         }
         os.idx += op->data.size + ops[os.idx].data.size;
@@ -3751,7 +3767,7 @@ bool CIccCalculatorFunc::ApplySequence(CIccApplyMpeCalculator *pApply, icUInt32N
           if (os.idx+dataSize >= nOps)
             return false;
 
-          if (!ApplySequence(pApply, op->data.size, &ops[os.idx+1]))
+          if (!ApplySequence(pApply, op->data.size, &ops[os.idx+1], nDepth + 1))
             return false;
         }
         os.idx+= op->data.size;
@@ -3791,7 +3807,7 @@ bool CIccCalculatorFunc::ApplySequence(CIccApplyMpeCalculator *pApply, icUInt32N
           if ((nDefOff + dataSize) >= nOps)
             return false;
           
-          if (!ApplySequence(pApply, dataSize, &ops[offset]))
+          if (!ApplySequence(pApply, dataSize, &ops[offset], nDepth + 1))
             break;
         }
       }
@@ -3811,7 +3827,7 @@ bool CIccCalculatorFunc::ApplySequence(CIccApplyMpeCalculator *pApply, icUInt32N
         if (offset >= nOps)
           return false;
         
-        if (!ApplySequence(pApply, dataSize, &ops[offset]))
+        if (!ApplySequence(pApply, dataSize, &ops[offset], nDepth + 1))
           break;
       }
 
@@ -4136,7 +4152,7 @@ int CIccCalculatorFunc::CheckUnderflowOverflow(SIccCalcOp *op, icUInt32Number nO
       return -2;
 
     if (op[i].sig == icSigIfOp) {
-      int incI = 0;
+      icUInt32Number incI = 0;
       if (i+1<nOps && op[i+1].sig==icSigElseOp) {
         p = i+2; 
         if (p > nOps)
@@ -4144,9 +4160,10 @@ int CIccCalculatorFunc::CheckUnderflowOverflow(SIccCalcOp *op, icUInt32Number nO
         nIfArgs = CheckUnderflowOverflow(&op[p], icIntMin(nOps-p, op[i].data.size), nArgs, bCheckUnderflow, sReport);
         if (nIfArgs<0)
           return -1;
-        incI =op[i].data.size;
-
-        p = i+2+op[i].data.size;
+        incI = op[i].data.size;
+        if (incI > nOps)
+          return -1;
+        p = i+2+incI;
         if (p > nOps)
           return -1;
         nElseArgs = CheckUnderflowOverflow(&op[p], icIntMin(nOps-p, op[i+1].data.size), nArgs, bCheckUnderflow, sReport);
@@ -4192,7 +4209,7 @@ int CIccCalculatorFunc::CheckUnderflowOverflow(SIccCalcOp *op, icUInt32Number nO
       icUInt32Number pos = i+1 + n;
       for (p=0; p<n; p++) {
         SIccCalcOp *sop = &op[i+1+p];
-        int len = sop->data.size;
+        icUInt32Number len = sop->data.size;
         if (pos>=nOps)
           return -1;
 
@@ -4741,7 +4758,7 @@ bool CIccMpeCalculator::Read(icUInt32Number size, CIccIO *pIO)
       // No, you may not make circular references in the tag,
       // reference back into the tag header,
       // or try to load more data than we have available.
-      if ( (pos->offset < headerSize) || ((pos->offset + pos->size) > size) ) {
+      if ( (pos->offset < headerSize) || (pos->size > size) || (pos->offset > size - pos->size) ) {
         free(posvals);
         return false;
       }
@@ -4773,7 +4790,7 @@ bool CIccMpeCalculator::Read(icUInt32Number size, CIccIO *pIO)
   pos = posvals;
   
   // overreading, references into the header, or not having a calc func would be bad
-  if ( !m_calcFunc || (pos->offset < headerSize) || ((pos->offset + pos->size) > size) ) {
+  if ( !m_calcFunc || (pos->offset < headerSize) || (pos->size > size) || (pos->offset > size - pos->size) ) {
     free(posvals);
     return false;
   }
