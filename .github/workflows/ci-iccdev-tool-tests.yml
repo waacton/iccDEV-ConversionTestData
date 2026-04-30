@@ -1942,6 +1942,32 @@ jobs:
           passed=$((passed + r21_pass))
           failed=$((failed + r21_fail))
 
+          # --- R22: Calculator cast/offset sanitizer regression ---
+          echo "--- R22: Calculator cast/offset sanitizer regression ---"
+          r22_pass=0 r22_fail=0
+          CALC_SCRIPT="${WORKSPACE_DIR}/.github/scripts/iccdev-calculator-regression-tests.sh"
+          if [ -f "$CALC_SCRIPT" ]; then
+            chmod +x "$CALC_SCRIPT"
+            r22_ec=0
+            ICCDEV_TOOLS_DIR="${WORKSPACE_DIR}/build/Tools" \
+              ICCDEV_TESTING_DIR="${WORKSPACE_DIR}/Testing" \
+              ICCDEV_TEST_OUTDIR="$OUTDIR/r22-calculator" \
+              "$CALC_SCRIPT" > "$OUTDIR/r22-calculator.log" 2>&1 || r22_ec=$?
+            cat "$OUTDIR/r22-calculator.log"
+            if [ "$r22_ec" -eq 0 ]; then
+              echo "  [OK]    Calculator operator and malformed-profile regressions pass"
+              r22_pass=$((r22_pass + 10))
+            else
+              echo "  [FAIL]  Calculator regression script exited $r22_ec"
+              r22_fail=$((r22_fail + 1))
+            fi
+          else
+            echo "  [SKIP]  calculator regression script not found"
+          fi
+          echo "  Calculator cast/offset sanitizer regression: $r22_pass passed, $r22_fail failed"
+          passed=$((passed + r22_pass))
+          failed=$((failed + r22_fail))
+
           echo ""
           echo "Regression checks: $passed passed, $failed failed"
           if [ "$failed" -gt 0 ]; then exit 1; fi
@@ -1977,8 +2003,8 @@ jobs:
           TOTAL_FAIL=0
           TOTAL_READ_FAIL=0
           if [ -d "$OUTDIR" ]; then
-            ASAN_FILES=$({ grep -rl "ERROR: AddressSanitizer" "$OUTDIR"/ 2>/dev/null || true; })
-            UBSAN_FILES=$({ grep -rl "runtime error:" "$OUTDIR"/ 2>/dev/null || true; })
+            ASAN_FILES=$({ grep -Irl "ERROR: AddressSanitizer" "$OUTDIR"/ 2>/dev/null || true; })
+            UBSAN_FILES=$({ grep -Irl "runtime error:" "$OUTDIR"/ 2>/dev/null || true; })
             TOTAL_LOGS=$(find "$OUTDIR" -name '*.log' -type f 2>/dev/null | wc -l)
             # Count pass/fail across per-profile logs (exit code in log content)
             for logf in "$OUTDIR"/*/*.log; do
@@ -2076,7 +2102,7 @@ jobs:
               ["15"]="iccApplySearch (CMM search optimization)"
               ["16"]="MCS regression (iccApplyProfiles TIFF pipeline)"
               ["17"]="iccV5DspObsToV4Dsp (v5 display to v4 conversion)"
-              ["18"]="Regression checks (bisect fixes: 599,736,744,751,752,763,769; stdobserver aliases; issue #928 mluc setter/read; issue #958 PCC illuminant)"
+              ["18"]="Regression checks (bisect fixes: 599,736,744,751,752,763,769; stdobserver aliases; issue #928 mluc setter/read; issue #958 PCC illuminant; calculator sanitizer)"
             )
 
             for phase in $(seq 1 18); do
@@ -2085,11 +2111,11 @@ jobs:
               pdir="$OUTDIR/$dir"
               if [ ! -d "$pdir" ]; then
                 echo "| $phase | $name | SKIP |"
-              elif grep -rq "ERROR: AddressSanitizer" "$pdir"/ 2>/dev/null; then
-                pa=$(grep -rl "ERROR: AddressSanitizer" "$pdir"/ 2>/dev/null | wc -l)
+              elif grep -Irq "ERROR: AddressSanitizer" "$pdir"/ 2>/dev/null; then
+                pa=$(grep -Irl "ERROR: AddressSanitizer" "$pdir"/ 2>/dev/null | wc -l)
                 echo "| $phase | $name | ASAN ($pa files) |"
-              elif grep -rq "runtime error:" "$pdir"/ 2>/dev/null; then
-                pu=$(grep -rl "runtime error:" "$pdir"/ 2>/dev/null | wc -l)
+              elif grep -Irq "runtime error:" "$pdir"/ 2>/dev/null; then
+                pu=$(grep -Irl "runtime error:" "$pdir"/ 2>/dev/null | wc -l)
                 echo "| $phase | $name | UBSAN ($pu files) |"
               elif [ -f "$pdir/.phase-fail" ]; then
                 reason="$(sanitize_line "$(sed -n '1p' "$pdir/.phase-fail")")"
