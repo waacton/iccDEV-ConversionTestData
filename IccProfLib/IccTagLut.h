@@ -140,12 +140,12 @@ public:
   virtual bool Write(CIccIO *pIO);
 
   icFloatNumber &operator[](icUInt32Number index) {return m_Curve[index];}
-  icFloatNumber *GetData(icUInt32Number index) {return &m_Curve[index];}
+  icFloatNumber *GetData(icUInt32Number index) {return m_Curve ? &m_Curve[index] : NULL;}
   icUInt32Number GetSize() const { return m_nSize; }
   bool SetSize(icUInt32Number nSize, icTagCurveSizeInit nSizeOpt=icInitZero);
   bool SetGamma(icFloatNumber gamma);
 
-  virtual void Begin() {m_nMaxIndex = (icUInt16Number)m_nSize - 1;}
+  virtual void Begin() {m_nMaxIndex = m_nSize ? (icUInt16Number)(m_nSize - 1) : 0;}
   virtual icFloatNumber Apply(icFloatNumber v) const;
   virtual icValidateStatus Validate(std::string sigPath, std::string &sReport, const CIccProfile* pProfile=NULL) const;
   virtual bool IsIdentity();
@@ -338,6 +338,9 @@ public:
   void DumpLut(std::string  &sDescription, const icChar *szName,
                icColorSpaceSignature csInput, icColorSpaceSignature csOutput,
                int nVerboseness, bool bUseLegacy=false);
+  void DumpLut(IDescribeSink &sink, const icChar *szName,
+               icColorSpaceSignature csInput, icColorSpaceSignature csOutput,
+               const DescribeOptions &opts, bool bUseLegacy=false);
 
   icFloatNumber& operator[](int index) { return m_pData[index]; }
   icFloatNumber* GetData(int index) { return &m_pData[index]; }
@@ -379,6 +382,14 @@ public:
 
 protected:
   void Iterate(std::string &sDescription, icUInt8Number nIndex, icUInt32Number nPos, size_t bufSize, bool bUseLegacy=false );
+  // Sink-based iteration. `cellsRemaining`==NULL means unbounded.
+  // `pOutText` is a row-format scratch buffer of size `bufSize`; `pVal` is a
+  // per-channel-value scratch buffer of size `valSize`. Caller owns both —
+  // they replace the older instance-level scratch members.
+  void Iterate(IDescribeSink &sink, icUInt8Number nIndex, icUInt32Number nPos,
+               size_t bufSize, bool bUseLegacy,
+               std::size_t *cellsRemaining,
+               icChar *pOutText, icChar *pVal, std::size_t valSize);
   void SubIterate(IIccCLUTExec* pExec, icUInt8Number nIndex, icUInt32Number nPos);
 
   icCLUTCLIPFUNC m_UnitClipFunc;
@@ -398,7 +409,6 @@ protected:
   //Iteration temporary variables
   icUInt8Number m_GridAdr[16];
   icFloatNumber m_fGridAdr[16];
-  icChar *m_pOutText, *m_pVal;
   icColorSpaceSignature m_csInput, m_csOutput;
 
   //Tetrahedral interpolation variables
@@ -448,6 +458,12 @@ public:
   icUInt8Number OutputChannels() const { return m_nOutput; }
 
   virtual void Describe(std::string &sDescription, int nVerboseness);
+  // Sink override — streams the (potentially huge) CLUT cell dump
+  // through `sink` instead of materializing the full description in
+  // memory first. Curves and matrix output, which is bounded, still
+  // uses small per-call string buffers internally.
+  using CIccTag::Describe;
+  virtual void Describe(IDescribeSink &sink, const DescribeOptions &opts);
 
   virtual void SetColorSpaces(icColorSpaceSignature csInput, icColorSpaceSignature csOutput);
   virtual icValidateStatus Validate(std::string sigPath, std::string &sReport, const CIccProfile* pProfile=NULL) const;

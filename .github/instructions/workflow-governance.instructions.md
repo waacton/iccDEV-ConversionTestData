@@ -2,15 +2,20 @@
 applyTo: ".github/workflows/**"
 ---
 
-# Workflow Governance — Auto-Loaded Instructions
+# Workflow Governance Instructions
 
-These rules apply to ALL GitHub Actions workflow files in this repository.
-Reference implementation: `ci-pr-action.yml` (bash) · `ci-pr-win.yml` (PowerShell).
-Based on [xsscx/governance/actions](https://github.com/xsscx/governance/tree/main/actions).
+These rules apply to all GitHub Actions workflow files in this repository.
+Reference implementations: `ci-pr-action.yml` for Bash and `ci-pr-win.yml` for
+PowerShell.
 
-## Shell Hardening (MANDATORY — every `run:` block)
+Workflow files, sanitizer helpers, CodeQL configuration, CTest gates, CPack and
+release packaging, and security automation are maintainer-owned
+infrastructure. General contributors should not edit these areas unless an
+iccDEV maintainer explicitly requests that work.
 
-### Bash Steps
+## Shell Hardening
+
+Every Bash `run:` block should use:
 
 ```yaml
 shell: bash --noprofile --norc {0}
@@ -20,16 +25,10 @@ run: |
   set -euo pipefail
   git config --global credential.helper ""
   unset GITHUB_TOKEN || true
-  if [ -f .github/scripts/sanitize-sed.sh ]; then
-    source .github/scripts/sanitize-sed.sh
-  else
-    escape_html() { local s="$1"; s="${s//&/&amp;}"; s="${s//</&lt;}"; s="${s//>/&gt;}"; printf '%s' "$s"; }
-    sanitize_line() { escape_html "$1"; }
-    sanitize_print() { escape_html "$1"; }
-  fi
+  source .github/scripts/sanitize-sed.sh
 ```
 
-### PowerShell Steps
+Every PowerShell `run:` block should use:
 
 ```yaml
 shell: pwsh -NoProfile -NoLogo -NonInteractive -Command {0}
@@ -44,142 +43,104 @@ run: |
   . .github/scripts/sanitize.ps1
 ```
 
-## Expression Injection Prevention (CRITICAL)
+## Injection Prevention
 
-**CRITICAL**: Never place `${{ }}` expressions directly in `run:` blocks.
-GitHub Actions evaluates expressions BEFORE the shell — an attacker-controlled
-value (branch name, PR title, matrix variable) becomes arbitrary shell code.
+Never place `${{ }}` expressions directly in shell code. Pass expression values
+through `env:` and read the environment variable inside the shell.
 
 ```yaml
-# WRONG — injectable
-run: echo "Building ${{ matrix.build_type }}"
-
-# CORRECT — pass through env
 env:
   BUILD_TYPE: ${{ matrix.build_type }}
 run: echo "Building ${BUILD_TYPE}"
 ```
 
-**Also applies to**: `github.event.pull_request.title`, `github.event.issue.title`,
-`github.head_ref`, `github.event.comment.body`, `github.event.inputs.*`,
-and ALL user-controllable contexts.
+This applies to branch names, PR titles, issue titles, comments, workflow inputs,
+and matrix values. Expressions in YAML-level `name:`, `with:`, `key:`, and `if:`
+fields are evaluated by GitHub Actions, not by the shell.
 
-Expressions in `name:`, `with:`, `key:`, and `if:` fields are evaluated by the
-GitHub Actions YAML parser (not shell), so they are safe from shell injection.
+## SIGPIPE Avoidance
 
-## SIGPIPE / Broken Pipe Avoidance (MANDATORY)
-
-**Rule**: NEVER use `echo "$variable" | grep -q "pattern"` in any `run:` block
-that has `set -o pipefail` (which is ALL steps per governance).
-
-When `grep -q` finds a match, it immediately exits and closes stdin. If the
-variable is large, `echo` gets SIGPIPE trying to write remaining data.
-Under `pipefail`, the non-zero exit propagates as pipeline failure.
+Under `set -o pipefail`, avoid `echo "$value" | grep -q pattern`. Prefer:
 
 ```bash
-# BEST — here-string (no pipe, no subshell)
-if grep -qE 'pattern' <<< "$variable"; then ...
-
-# GOOD — grep reads file directly
-if grep -q 'pattern' "$filepath"; then ...
-
-# OK — bash pattern matching (no external command)
-if [[ "$variable" =~ pattern ]]; then ...
-```
-
-**WRONG** (causes SIGPIPE under pipefail):
-```bash
-if echo "$variable" | grep -q 'pattern'; then ...
-if printf '%s' "$variable" | grep -q 'pattern'; then ...
+grep -qE 'pattern' <<< "$value"
+grep -q 'pattern' "$filepath"
+[[ "$value" =~ pattern ]]
 ```
 
 ## Output Sanitization
 
-Every write to `GITHUB_STEP_SUMMARY` or `GITHUB_OUTPUT` MUST use sanitizer functions:
+Sanitize every write to `GITHUB_STEP_SUMMARY` or `GITHUB_OUTPUT`.
 
 | Bash | PowerShell | Purpose |
-|------|-----------|---------|
-| `sanitize_line "$var"` | `Sanitize-Line $var` | Single-line HTML-safe output |
-| `sanitize_print "$var"` | `Sanitize-Print $var` | Block output (preserves structure) |
-| `sanitize_ref "$var"` | `Sanitize-Ref $var` | Git ref sanitization |
-| `sanitize_filename "$var"` | `Sanitize-Filename $var` | Path component sanitization |
-| `escape_html "$var"` | `Escape-Html $var` | Raw HTML entity encoding |
+|------|------------|---------|
+| `sanitize_line "$var"` | `Sanitize-Line $var` | One safe line |
+| `sanitize_print "$var"` | `Sanitize-Print $var` | Safe block output |
+| `sanitize_ref "$var"` | `Sanitize-Ref $var` | Git ref |
+| `sanitize_filename "$var"` | `Sanitize-Filename $var` | Path component |
+| `escape_html "$var"` | `Escape-Html $var` | HTML entity encoding |
 
-### Multiline Variables
+For multiline content, sanitize one line at a time.
 
-`sanitize_line` outputs NO trailing newline. For multiline content, iterate:
+## Permissions and Credentials
 
-```bash
-# WRONG — collapses to single line
-sanitize_line "$MULTILINE_VAR"
-
-# CORRECT — preserves line-per-line formatting
-echo "$MULTILINE_VAR" | while IFS= read -r line; do
-  sanitize_line "$line"
-  echo ""
-done
-```
-
-PowerShell equivalent:
-```powershell
-$multiline -split "`n" | ForEach-Object { Sanitize-Line $_ }
-```
-
-## Permissions
-
-Use least-privilege `permissions:` at job level (not workflow level when possible):
-
-```yaml
-permissions:
-  contents: read
-  pull-requests: read
-  # Add write only when genuinely needed (e.g., release uploads)
-```
-
-## Credential Hygiene
-
-Every step must clear credentials before running user-controllable logic:
-- `git config --global credential.helper ""`
-- `unset GITHUB_TOKEN || true` (bash) / `Remove-Item env:GITHUB_TOKEN` (PowerShell)
-
-## Concurrency
-
-PR workflows must use concurrency groups to cancel stale runs:
-```yaml
-concurrency:
-  group: "ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}"
-  cancel-in-progress: true
-```
-
-## GitHub Actions Expression Parser Quirks
-
-- `${{ }}` with empty braces is a **parse error** even inside bash `#` comments
-- GitHub evaluates ALL `${{ }}` in YAML string values before bash sees them
-- YAML-level comments (outside `run:` blocks) are stripped first and are safe
-- `defaults.run.env` does NOT exist — use per-step or job-level `env:`
+- Use least-privilege `permissions:` at job level when possible.
+- Clear git credentials before user-controllable logic:
+  `git config --global credential.helper ""`.
+- Remove `GITHUB_TOKEN` from the environment unless the step truly needs it.
+- PR workflows should use concurrency groups with `cancel-in-progress: true`.
 
 ## Automated Scanner
 
-`ci-pr-risk-security-analysis.yml` performs 10 automated governance checks on
-every workflow in this repository. Trigger manually via `workflow_dispatch`.
+`ci-pr-risk-security-analysis.yml` checks workflow governance, including action
+pinning, dangerous triggers, credential hygiene, shell hardening, matrix
+expression injection, output sanitization, permissions, and supply-chain risk.
 
-| # | Check | Severity |
-|---|-------|----------|
-| 1 | Action SHA Pinning | CRITICAL (unpinned) / MEDIUM (tag-only) |
-| 2 | Dangerous Trigger Detection | CRITICAL (`pull_request_target`) |
-| 3 | Credential Hygiene | HIGH |
-| 4 | Shell Hardening Rate | HIGH |
-| 5 | Matrix Expression Injection | CRITICAL |
-| 6 | Output Sanitization Rate | HIGH |
-| 7 | Permissions Minimization | MEDIUM |
-| 8 | Supply-Chain Risk Score | Composite (0-100+) |
-| 9 | Trivy-Specific Indicators | CRITICAL |
-| 10 | Workflow Inventory | Informational |
+## Full Run Log Audit
 
-## See Also
+A workflow conclusion of `success` is not proof that the workflow is clean.
+When a run URL is part of the task, download and inspect the complete log
+archive.
 
-- `ci-pr-action.yml` — Reference compliant workflow (bash)
-- `ci-pr-win.yml` — Reference compliant workflow (PowerShell)
-- `.github/scripts/sanitize-sed.sh` — Bash sanitizer (V3)
-- `.github/scripts/sanitize.ps1` — PowerShell sanitizer (V1)
-- [xsscx/governance](https://github.com/xsscx/governance/tree/main/actions) — Upstream standards
+Search runtime output for:
+
+- `##[error]`, `##[warning]`, `::error`, and `::warning`
+- `CMake Warning`
+- `File ".+" does not exist`
+- `Cannot open: Permission denied`
+- `post-build check`
+- `DEP0005`
+- `digest-mismatch`
+
+Filter out echoed shell source before classifying diagnostics. Bash source lines
+printed by Actions commonly include ANSI cyan `\033[36;1m`; those lines often
+show failure-handling code, not an actual failure.
+
+Treat these green-run signals as actionable:
+
+- Duplicate `install_manifest.txt` paths.
+- Install or uninstall logs with missing-file diagnostics.
+- Duplicate generated header install lines.
+- Cache paths that include apt lock or `partial` directories.
+- Homebrew already-installed annotations from unconditional `brew install`.
+- vcpkg root mismatch warnings.
+- Static vcpkg triplets linked against the wrong CRT.
+- Matrix configurations that skip smoke tests for non-Debug variants.
+
+Use YAML parsing, `actionlint`, shellcheck, `yamllint`, and the workflow
+permission audit for workflow files. Run CodeQL for related C/C++ or CMake
+changes, not as the workflow YAML checker.
+
+## Test Workflow Guardrails
+
+CTest discovery and execution steps must use `--no-tests=error`. Workflows that
+own the Linux CTest gate must assert the expected `Total Tests` line after
+`ctest -N`.
+
+Do not mask profile generation, CTest discovery, or regression execution with
+`|| true`. Expected skips must be represented as explicit script output and the
+workflow must still have a deterministic pass/fail condition.
+
+When profile generation counts change, update the assertions in
+`docs/ctest.md`, `Build/Cmake/Testing/CMakeLists.txt`, and the workflows that
+validate generated-profile totals.

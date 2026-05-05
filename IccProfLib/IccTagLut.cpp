@@ -78,6 +78,7 @@
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
+#include <vector>
 #include "IccTag.h"
 #include "IccUtil.h"
 #include "IccProfile.h"
@@ -452,9 +453,13 @@ bool CIccTagCurve::SetSize(icUInt32Number nSize, icTagCurveSizeInit nSizeOpt/*=i
   if (nSize==m_nSize)
     return true;
 
-  if (!nSize && m_Curve) {
-    free(m_Curve);
-    m_Curve = NULL;
+  if (!nSize) {
+    if (m_Curve) {
+      free(m_Curve);
+      m_Curve = NULL;
+    }
+    m_nSize = 0;
+    return true;
   }
   else {
     if (!m_Curve)
@@ -767,7 +772,7 @@ bool CIccTagParametricCurve::Read(icUInt32Number size, CIccIO *pIO)
   if (!m_nNumParam) {
     // Unknown nFunctionType path. Previously this fell back to
     // `(icUInt16Number)((size - nHdrSize) / 4)` which silently
-    // truncates large-size tags to a small number of parameters —
+    // truncates large-size tags to a small number of parameters -
     // a parse-desync primitive. Use u32 math and refuse pathological
     // derived counts instead.
     icUInt32Number derived =
@@ -780,10 +785,11 @@ bool CIccTagParametricCurve::Read(icUInt32Number size, CIccIO *pIO)
 
   if (m_nNumParam) {
     int i;
-    if (nHdrSize + m_nNumParam*sizeof(icS15Fixed16Number) > size)
+    const icUInt16Number nNumParam = m_nNumParam;
+    if (nHdrSize + nNumParam*sizeof(icS15Fixed16Number) > size)
       return false;
 
-    for (i=0; i<m_nNumParam; i++) {
+    for (i=0; i<nNumParam; i++) {
       icS15Fixed16Number num;
       if (!pIO->Read32(&num, 1))
         return false;
@@ -826,7 +832,8 @@ bool CIccTagParametricCurve::Write(CIccIO *pIO)
 
   if (m_nNumParam) {
     int i;
-    for (i=0; i<m_nNumParam; i++) {
+    const icUInt16Number nNumParam = m_nNumParam;
+    for (i=0; i<nNumParam; i++) {
       icS15Fixed16Number num = icDtoF(m_dParam[i]);
       if (!pIO->Write32(&num, 1))
         return false;
@@ -914,7 +921,8 @@ default:
   snprintf(buf, bufSize, "Unknown Function with %d parameters:\n", m_nNumParam);
   sDescription += buf;
 
-  for (i=0; i<m_nNumParam; i++) {
+  const icUInt16Number nNumParam = m_nNumParam;
+  for (i=0; i<nNumParam; i++) {
     snprintf(buf, bufSize, "Param[%d] = %.4lf\n", i, m_dParam[i]);
     sDescription += buf;
   }
@@ -1723,8 +1731,6 @@ CIccCLUT::CIccCLUT(icUInt8Number nInputChannels, icUInt16Number nOutputChannels,
   m_nPrecision = nPrecision;
   m_pData = NULL;
   m_nOffset = NULL;
-  m_pOutText = NULL;
-  m_pVal = NULL;
   m_nNumPoints = 0;
   m_nNodes = 0;
   m_csInput = icSigUnknownData;
@@ -2066,39 +2072,62 @@ bool CIccCLUT::Write(CIccIO *pIO)
  *  sDescription = string to concatenate data dump to,
  *  nIndex = the channel number,
  *  nPos = the current position in the CLUT
- *  bufSize = the size of the buffer m_pOutText, for error checking
+ *  bufSize = the size of the row-format scratch buffer, for error checking
  *
  *****************************************************************************
  */
 void CIccCLUT::Iterate(std::string &sDescription, icUInt8Number nIndex, icUInt32Number nPos, size_t bufSize, bool bUseLegacy )
+{
+  // Delegate to the sink-based recursion via a string sink. Allocates the
+  // scratch buffers locally — keeps the legacy protected entry point
+  // self-contained so any external callers keep working byte-for-byte.
+  std::vector<icChar> outBuf(bufSize ? bufSize : 1);
+  icChar valBuf[40];
+  StringDescribeSink sink(sDescription);
+  Iterate(sink, nIndex, nPos, bufSize, bUseLegacy, /*cellsRemaining=*/NULL,
+          outBuf.data(), valBuf, sizeof(valBuf));
+}
+
+void CIccCLUT::Iterate(IDescribeSink &sink, icUInt8Number nIndex, icUInt32Number nPos,
+                       size_t bufSize, bool bUseLegacy,
+                       std::size_t *cellsRemaining,
+                       icChar *pOutText, icChar *pVal, std::size_t valSize)
 {
   // CWE-674: ICC spec caps LUT input channels at 16 (icMaxChannels).
   // Bound recursion depth defensively even though m_nInput is icUInt8Number.
   static const icUInt8Number kMaxIterateDepth = 16;
   if (nIndex >= kMaxIterateDepth)
     return;
+  if (cellsRemaining && *cellsRemaining == 0)
+    return;
+  if (!sink.ShouldContinue())
+    return;
   if (nIndex < m_nInput) {
     int i;
     for (i=0; i<m_GridPoints[nIndex]; i++) {
       m_GridAdr[nIndex] = i;
-      Iterate(sDescription, nIndex+1, nPos, bufSize, bUseLegacy);
+      Iterate(sink, nIndex+1, nPos, bufSize, bUseLegacy, cellsRemaining,
+              pOutText, pVal, valSize);
+      if (cellsRemaining && *cellsRemaining == 0)
+        return;
+      if (!sink.ShouldContinue())
+        return;
       nPos += m_DimSize[nIndex];
     }
   }
   else {
-    icChar *ptr = m_pOutText;
+    icChar *ptr = pOutText;
     icChar *ptrEnd = ptr + bufSize;
     icFloatNumber *pData = &m_pData[nPos];
     int i;
 
     for (i=0; i<m_nInput; i++) {
-// TODO - hard coding size temporarily, really should be passed in
-      icColorValue(m_pVal, 40, (icFloatNumber)m_GridAdr[i] / (m_GridPoints[i]-1) , m_csInput, i, bUseLegacy);
+      icColorValue(pVal, valSize, (icFloatNumber)m_GridAdr[i] / (m_GridPoints[i]-1), m_csInput, i, bUseLegacy);
 
 // TODO - this buffer handling is sloppy, but should be ok for now
 // really needs to be refactored, needs some sort of error return if buffer overflows
 // right now it will terminate the output when the buffer overflows
-      ptr += snprintf(ptr, size_t(ptrEnd-ptr), " %s", m_pVal);
+      ptr += snprintf(ptr, size_t(ptrEnd-ptr), " %s", pVal);
       if (ptr >= ptrEnd)
             return;
     }
@@ -2106,16 +2135,17 @@ void CIccCLUT::Iterate(std::string &sDescription, icUInt8Number nIndex, icUInt32
     ptr += 2;
 
     for (i=0; i<m_nOutput; i++) {
-// TODO - hard coding size temporarily, really should be passed in
-      icColorValue(m_pVal, 40, pData[i], m_csOutput, i, bUseLegacy);
+      icColorValue(pVal, valSize, pData[i], m_csOutput, i, bUseLegacy);
 
-      ptr += snprintf(ptr, size_t(ptrEnd-ptr), " %s", m_pVal);
+      ptr += snprintf(ptr, size_t(ptrEnd-ptr), " %s", pVal);
       if (ptr >= ptrEnd)
             return;
     }
     strcpy(ptr, "\n");
-    sDescription += (const icChar*)m_pOutText;
+    sink.Write((const char*)pOutText, strlen(pOutText));
 
+    if (cellsRemaining && *cellsRemaining > 0)
+      --(*cellsRemaining);
   }
 }
 
@@ -2224,59 +2254,74 @@ void CIccCLUT::DumpLut(std::string  &sDescription, const icChar *szName,
                        icColorSpaceSignature csInput, icColorSpaceSignature csOutput,
                        int nVerboseness, bool bUseLegacy)
 {
+  StringDescribeSink sink(sDescription);
+  DumpLut(sink, szName, csInput, csOutput,
+          OptionsFromVerbosity(nVerboseness), bUseLegacy);
+}
+
+void CIccCLUT::DumpLut(IDescribeSink &sink, const icChar *szName,
+                       icColorSpaceSignature csInput, icColorSpaceSignature csOutput,
+                       const DescribeOptions &opts, bool bUseLegacy)
+{
   const size_t outSize = 200000;
   const size_t nameSize = 40;
   icChar szOutText[outSize], szColor[nameSize];
   int i;
+  int n;
 
-  snprintf(szOutText, outSize, "BEGIN_LUT %s %d %d\n", szName, m_nInput, m_nOutput);
-  sDescription += szOutText;
+  if (!sink.ShouldContinue())
+    return;
 
-  if (nVerboseness > 75) {
+  n = snprintf(szOutText, outSize, "BEGIN_LUT %s %d %d\n", szName, m_nInput, m_nOutput);
+  if (n > 0) sink.Write(szOutText, (std::size_t)n);
 
-    for (i=0; i<m_nInput; i++) {
-      icColorIndexName(szColor, nameSize, csInput, i, m_nInput, "In");
-      snprintf(szOutText, outSize, " %s=%d", szColor, m_GridPoints[i]);
-      sDescription += szOutText;
-    }
+  // Channel header + cells share the legacy nVerboseness > 75 gate.
+  // Suppressing channels alone (channels=false, cells=true) is rejected
+  // here because the cell rows reference channel indices set up below.
+  if (!opts.emit_clut_channels)
+    return;
 
-    sDescription += "  ";
+  for (i=0; i<m_nInput; i++) {
+    icColorIndexName(szColor, nameSize, csInput, i, m_nInput, "In");
+    n = snprintf(szOutText, outSize, " %s=%d", szColor, m_GridPoints[i]);
+    if (n > 0) sink.Write(szOutText, (std::size_t)n);
+  }
 
-    for (i=0; i<m_nOutput; i++) {
-      icColorIndexName(szColor, nameSize, csOutput, i, m_nOutput, "Out");
-      snprintf(szOutText, outSize, " %s", szColor);
-      sDescription += szOutText;
-    }
+  sink.Write("  ", 2);
 
-    sDescription += "\n";
+  for (i=0; i<m_nOutput; i++) {
+    icColorIndexName(szColor, nameSize, csOutput, i, m_nOutput, "Out");
+    n = snprintf(szOutText, outSize, " %s", szColor);
+    if (n > 0) sink.Write(szOutText, (std::size_t)n);
+  }
 
-    if (nVerboseness > 75) {
-      size_t len = 0;
-      for (i=0; i<m_nInput; i++) {
-        icColorValue(szColor, nameSize, 1.0, csInput, i, bUseLegacy);
-        len += strlen(szColor);
-      }
-      for (i=0; i<m_nOutput; i++) {
-        icColorValue(szColor, nameSize, 1.0, csOutput, i, bUseLegacy);
-        len += strlen(szColor);
-      }
-      len += m_nInput + m_nOutput + 6;
+  sink.Write("\n", 1);
 
-      sDescription.reserve(sDescription.size() + NumPoints()*len);
+  if (!opts.emit_clut_cells)
+    return;
+  if (!sink.ShouldContinue())
+    return;
 
-      //Initialize iteration member variables
-      m_csInput = csInput;
-      m_csOutput = csOutput;
-      m_pOutText = szOutText;
-      m_pVal = szColor;
-      memset(m_GridAdr, 0, 16);
+  // Cache the colour-space signatures so Iterate can format channel labels.
+  // Scratch buffers are threaded through Iterate as parameters, which keeps
+  // the stack arrays' lifetimes confined to this function frame.
+  m_csInput = csInput;
+  m_csOutput = csOutput;
+  memset(m_GridAdr, 0, 16);
 
-      Iterate(sDescription, 0, 0, outSize, bUseLegacy);
+  // Apply opts.max_clut_cells_per_tag as a budget on emitted cells.
+  std::size_t budget = opts.max_clut_cells_per_tag;
+  std::size_t *budgetPtr = budget ? &budget : NULL;
+  std::size_t budgetStart = budget;
 
-      // Reset member pointers to avoid dangling references to stack arrays
-      m_pOutText = NULL;
-      m_pVal = NULL;
-    }
+  Iterate(sink, 0, 0, outSize, bUseLegacy, budgetPtr,
+          szOutText, szColor, nameSize);
+
+  // If we ran out of budget mid-dump, mark the truncation explicitly.
+  if (budgetPtr && budget == 0 && sink.ShouldContinue()) {
+    n = snprintf(szOutText, outSize,
+                 "[clut cells truncated after %zu]\n", budgetStart);
+    if (n > 0) sink.Write(szOutText, (std::size_t)n);
   }
 }
 
@@ -3286,7 +3331,8 @@ icValidateStatus CIccCLUT::Validate(std::string sigPath, std::string &sReport, c
   if (sig==icSigLutAtoBType || sig==icSigLutBtoAType) {
     const size_t tempSize = 256;
     char temp[tempSize];
-    for (int i=0; i<m_nInput; i++) {
+    const int nInput = (int)m_nInput;
+    for (int i=0; i<nInput; i++) {
       if (m_GridPoints[i]<2) {
         sReport += icMsgValidateCriticalError;
         sReport += sSigPathName;
@@ -3685,6 +3731,126 @@ void CIccMBB::Describe(std::string &sDescription, int nVerboseness)
         icColorIndexName(color, nameSize, m_csOutput, i, m_nOutput, "");
         snprintf(buf, bufSize, "B_Curve_%s", color);
         m_CurvesB[i]->DumpLut(sDescription, buf, m_csOutput, i, nVerboseness);
+      }
+    }
+  }
+}
+
+/**
+ ****************************************************************************
+ * Name: CIccMBB::Describe (sink overload)
+ *
+ * Purpose: Same output as the legacy Describe(std::string&, int), but
+ *  emitted through `sink` so the CLUT cell dump (which can be tens to
+ *  hundreds of MB on high-channel-count profiles) streams instead of
+ *  materializing in a single std::string. Curves and matrix output,
+ *  which is bounded by sample/parameter count, still goes through small
+ *  per-call string buffers.
+ *
+ *  Byte-for-byte identical to legacy Describe() when invoked via
+ *  CIccTag::Describe(sink, OptionsFromVerbosity(v)) at v=100.
+ *****************************************************************************
+ */
+void CIccMBB::Describe(IDescribeSink &sink, const DescribeOptions &opts)
+{
+  int i;
+  const size_t nameSize = 40;
+  icChar color[nameSize], buf[128];
+  // Per-section scratch buffer for legacy DumpLut() calls. Reused so
+  // each curve/matrix dump goes to the sink before the next one runs,
+  // bounding live string memory to a single section's output.
+  std::string section;
+  // Approximate the legacy nVerboseness so the curve/matrix DumpLut()
+  // calls (which still take int verbosity) honour the same gates the
+  // structured options express.
+  const int nVerboseness = VerbosityFromOptions(opts);
+
+  auto flushSection = [&](void) {
+    if (!sink.ShouldContinue()) { section.clear(); return; }
+    if (!section.empty()) {
+      sink.Write(section.data(), section.size());
+      section.clear();
+    }
+  };
+
+  if (IsInputMatrix()) {
+    if (m_CurvesB && !m_bUseMCurvesAsBCurves) {
+      for (i=0; i<m_nInput && sink.ShouldContinue(); i++) {
+        icColorIndexName(color, nameSize, m_csInput, i, m_nInput, "");
+        snprintf(buf, sizeof(buf), "B_Curve_%s", color);
+        m_CurvesB[i]->DumpLut(section, buf, m_csInput, i, nVerboseness);
+        flushSection();
+      }
+    }
+
+    if (m_Matrix && sink.ShouldContinue()) {
+      m_Matrix->DumpLut(section, "Matrix", nVerboseness);
+      flushSection();
+    }
+
+    if (m_CurvesM) {
+      for (i=0; i<m_nInput && sink.ShouldContinue(); i++) {
+        icColorIndexName(color, nameSize, m_csInput, i, m_nInput, "");
+        if (!m_bUseMCurvesAsBCurves)
+          snprintf(buf, sizeof(buf), "M_Curve_%s", color);
+        else
+          snprintf(buf, sizeof(buf), "B_Curve_%s", color);
+        m_CurvesM[i]->DumpLut(section, buf, m_csInput, i, nVerboseness);
+        flushSection();
+      }
+    }
+
+    if (m_CLUT && sink.ShouldContinue()) {
+      // Direct sink path — this is the entry that avoids the
+      // multi-MB std::string allocation on high-channel-count CLUTs.
+      m_CLUT->DumpLut(sink, "CLUT", m_csInput, m_csOutput, opts,
+                      GetType()==icSigLut16Type);
+    }
+
+    if (m_CurvesA) {
+      for (i=0; i<m_nOutput && sink.ShouldContinue(); i++) {
+        icColorIndexName(color, nameSize, m_csOutput, i, m_nOutput, "");
+        snprintf(buf, sizeof(buf), "A_Curve_%s", color);
+        m_CurvesA[i]->DumpLut(section, buf, m_csOutput, i, nVerboseness);
+        flushSection();
+      }
+    }
+  }
+  else {
+    if (m_CurvesA) {
+      for (i=0; i<m_nInput && sink.ShouldContinue(); i++) {
+        icColorIndexName(color, nameSize, m_csInput, i, m_nInput, "");
+        snprintf(buf, sizeof(buf), "A_Curve_%s", color);
+        m_CurvesA[i]->DumpLut(section, buf, m_csInput, i, nVerboseness);
+        flushSection();
+      }
+    }
+
+    if (m_CLUT && sink.ShouldContinue()) {
+      m_CLUT->DumpLut(sink, "CLUT", m_csInput, m_csOutput, opts,
+                      GetType()==icSigLut16Type);
+    }
+
+    if (m_CurvesM && this->GetType()!=icSigLut8Type) {
+      for (i=0; i<m_nOutput && sink.ShouldContinue(); i++) {
+        icColorIndexName(color, nameSize, m_csOutput, i, m_nOutput, "");
+        snprintf(buf, sizeof(buf), "M_Curve_%s", color);
+        m_CurvesM[i]->DumpLut(section, buf, m_csOutput, i, nVerboseness);
+        flushSection();
+      }
+    }
+
+    if (m_Matrix && sink.ShouldContinue()) {
+      m_Matrix->DumpLut(section, "Matrix", nVerboseness);
+      flushSection();
+    }
+
+    if (m_CurvesB) {
+      for (i=0; i<m_nOutput && sink.ShouldContinue(); i++) {
+        icColorIndexName(color, nameSize, m_csOutput, i, m_nOutput, "");
+        snprintf(buf, sizeof(buf), "B_Curve_%s", color);
+        m_CurvesB[i]->DumpLut(section, buf, m_csOutput, i, nVerboseness);
+        flushSection();
       }
     }
   }
@@ -4161,7 +4327,7 @@ bool CIccTagLutAtoB::Read(icUInt32Number size, CIccIO *pIO)
   if (Offset[1]) {
     icS15Fixed16Number tmp;
 
-    // 64-bit widened bounds check — the prior u32 addition wrapped
+    // 64-bit widened bounds check - the prior u32 addition wrapped
     // when Offset[1] was close to 2^32.
     if (static_cast<icUInt64Number>(Offset[1]) +
         12u * sizeof(icS15Fixed16Number) > size)
@@ -5227,6 +5393,10 @@ bool CIccTagLut16::Read(icUInt32Number size, CIccIO *pIO)
   if (m_nInput > 15 || m_nOutput > 15)
     return false;
 
+  if (nInputEntries < 2 || nInputEntries > 4096 ||
+      nOutputEntries < 2 || nOutputEntries > 4096)
+    return false;
+
   //B Curves
   pCurves = NewCurvesB();
 
@@ -5347,6 +5517,7 @@ bool CIccTagLut16::Write(CIccIO *pIO)
   icUInt8Number i, nGrid;
   icS15Fixed16Number XYZMatrix[9];
   icUInt16Number nInputEntries, nOutputEntries;
+  icUInt32Number nInputCurveEntries, nOutputCurveEntries;
   LPIccCurve *pCurves;
   CIccTagCurve *pCurve;
 
@@ -5370,10 +5541,23 @@ bool CIccTagLut16::Write(CIccIO *pIO)
   if (!pCurves || !m_CurvesA || !m_CLUT)
     return false;
 
+  if (m_nInput < 1 || m_nOutput < 1 || m_nInput > 15 || m_nOutput > 15)
+    return false;
+
+  if (!pCurves[0] || pCurves[0]->GetType()!=icSigCurveType ||
+      !m_CurvesA[0] || m_CurvesA[0]->GetType()!=icSigCurveType)
+    return false;
+
   nGrid = m_CLUT->GridPoints();
 
-  nInputEntries = (icUInt16Number)(((CIccTagCurve*)pCurves[0])->GetSize());
-  nOutputEntries = (icUInt16Number)(((CIccTagCurve*)m_CurvesA[0])->GetSize());
+  nInputCurveEntries = ((CIccTagCurve*)pCurves[0])->GetSize();
+  nOutputCurveEntries = ((CIccTagCurve*)m_CurvesA[0])->GetSize();
+  if (nInputCurveEntries < 2 || nInputCurveEntries > 4096 ||
+      nOutputCurveEntries < 2 || nOutputCurveEntries > 4096)
+    return false;
+
+  nInputEntries = (icUInt16Number)nInputCurveEntries;
+  nOutputEntries = (icUInt16Number)nOutputCurveEntries;
 
   if (!pIO->Write32(&sig) ||
       !pIO->Write32(&m_nReserved) ||
@@ -5387,20 +5571,23 @@ bool CIccTagLut16::Write(CIccIO *pIO)
     return false;
 
   //B Curves
-  for (i=0; i<m_nInput; i++) {
-    if (pCurves[i]->GetType()!=icSigCurveType)
-      return false;
+  for (i=0; i<15; i++) {
+    if (i>=m_nInput)
+      break;
 
     pCurve = (CIccTagCurve*)pCurves[i];
-    if (!pCurve)
+    if (!pCurve || pCurve->GetType()!=icSigCurveType)
       return false;
     
     // validate that the sizes match between all curves
     if (pCurve->GetSize() != nInputEntries)
         return false;
 
-    if (pIO->WriteUInt16Float(&(*pCurve)[0], nInputEntries) != nInputEntries)
-      return false;
+    if (nInputEntries) {
+      icFloatNumber *pCurveData = pCurve->GetData(0);
+      if (!pCurveData || pIO->WriteUInt16Float(pCurveData, nInputEntries) != nInputEntries)
+        return false;
+    }
   }
 
   //CLUT
@@ -5410,18 +5597,23 @@ bool CIccTagLut16::Write(CIccIO *pIO)
   //A Curves
   pCurves = m_CurvesA;
 
-  for (i=0; i<m_nOutput; i++) {
-    if (pCurves[i]->GetType()!=icSigCurveType)
-      return false;
+  for (i=0; i<15; i++) {
+    if (i>=m_nOutput)
+      break;
 
     pCurve = (CIccTagCurve*)pCurves[i];
-    
+    if (!pCurve || pCurve->GetType()!=icSigCurveType)
+      return false;
+
     // validate that the sizes match between all curves
     if (pCurve->GetSize() != nOutputEntries)
         return false;
 
-    if (pIO->WriteUInt16Float(&(*pCurve)[0], nOutputEntries) != nOutputEntries)
-      return false;
+    if (nOutputEntries) {
+      icFloatNumber *pCurveData = pCurve->GetData(0);
+      if (!pCurveData || pIO->WriteUInt16Float(pCurveData, nOutputEntries) != nOutputEntries)
+        return false;
+    }
   }
   return true;
 }
@@ -5482,10 +5674,11 @@ icValidateStatus CIccTagLut16::Validate(std::string sigPath, std::string &sRepor
             rv = icMaxStatus(rv, m_CurvesB[i]->Validate(sigPath+icGetSigPath(GetType()), sReport, pProfile));
             if (m_CurvesB[i]->GetType()==icSigCurveType) {
               CIccTagCurve *pTagCurve = (CIccTagCurve*)m_CurvesB[i];
-              if (pTagCurve->GetSize()==1) {
+              icUInt32Number nCurveEntries = pTagCurve->GetSize();
+              if (nCurveEntries < 2 || nCurveEntries > 4096) {
                 sReport += icMsgValidateCriticalError;
                 sReport += sSigPathName;
-                sReport += " - lut16Tags do not support single entry gamma curves.\n";
+                sReport += " - lut16Type input tables require 2 to 4096 entries.\n";
                 rv = icMaxStatus(rv, icValidateCriticalError);
               }
             }
@@ -5523,10 +5716,11 @@ icValidateStatus CIccTagLut16::Validate(std::string sigPath, std::string &sRepor
             rv = icMaxStatus(rv, m_CurvesA[i]->Validate(sigPath+icGetSigPath(GetType()), sReport, pProfile));
             if (m_CurvesA[i]->GetType()==icSigCurveType) {
               CIccTagCurve *pTagCurve = (CIccTagCurve*)m_CurvesA[i];
-              if (pTagCurve->GetSize()==1) {
+              icUInt32Number nCurveEntries = pTagCurve->GetSize();
+              if (nCurveEntries < 2 || nCurveEntries > 4096) {
                 sReport += icMsgValidateCriticalError;
                 sReport += sSigPathName;
-                sReport += " - lut16Tags do not support single entry gamma curves.\n";
+                sReport += " - lut16Type output tables require 2 to 4096 entries.\n";
                 rv = icMaxStatus(rv, icValidateCriticalError);
               }
             }

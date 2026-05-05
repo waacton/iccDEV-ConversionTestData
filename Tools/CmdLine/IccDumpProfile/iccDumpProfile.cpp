@@ -89,7 +89,7 @@
 
 #if defined(_WIN32) || defined(WIN32)
 #include <crtdbg.h>
-#elif __GLIBC__
+#elif defined(__GLIBC__)
 #include <mcheck.h>
 #endif
 
@@ -296,7 +296,7 @@ int main(int argc, char* argv[])
   tmp = tmp | _CRTDBG_LEAK_CHECK_DF | _CRTDBG_ALLOC_MEM_DF; // | _CRTDBG_CHECK_ALWAYS_DF;
   _CrtSetDbgFlag(tmp);
   //_CrtSetBreakAlloc(1163);
-#elif __GLIBC__
+#elif defined(__GLIBC__)
   mcheck(NULL);
 #endif // WIN32
 #endif // MEMORY_LEAK_CHECK && _DEBUG
@@ -522,8 +522,11 @@ int main(int argc, char* argv[])
         // Number of actual padding bytes between this tag and closest neighbour (or EOF)
         // Should be 0-3 if compliant. Negative number if tags overlap!
         // Guard against unsigned integer overflow in subtraction
-        if (i->TagInfo.offset + (icUInt64Number)i->TagInfo.size > (icUInt64Number)closest)
-            pad = -((int)((icUInt64Number)i->TagInfo.offset + i->TagInfo.size - closest));
+        icUInt64Number tagEnd = (icUInt64Number)i->TagInfo.offset + i->TagInfo.size;
+        if (tagEnd > (icUInt64Number)closest) {
+            icUInt64Number overlap = tagEnd - (icUInt64Number)closest;
+            pad = (overlap > (icUInt64Number)INT_MAX) ? INT_MIN : -(int)overlap;
+        }
         else
             pad = closest - i->TagInfo.offset - i->TagInfo.size;
 

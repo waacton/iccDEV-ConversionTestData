@@ -2,124 +2,129 @@
 applyTo: "Testing/**"
 ---
 
-# Testing  --  Auto-Loaded Instructions
+# Testing Instructions
 
 ## Test Infrastructure
 
-Two shell scripts drive all iccDEV testing:
+| Script | Purpose | Prerequisite |
+|--------|---------|--------------|
+| `Testing/CreateAllProfiles.sh` | Generate ICC/iccMAX profiles from XML | `iccFromXml` on PATH |
+| `Testing/RunTests.sh` | Validate profiles with round-trip and CMM apply | tools on PATH |
+| `Testing/CreateAllProfiles.bat` | Windows equivalent | tools on PATH |
+| `Testing/RunTests.bat` | Windows equivalent | tools on PATH |
 
-| Script | Purpose | Prereq |
-|--------|---------|--------|
-| `Testing/CreateAllProfiles.sh` | Generate ~230 ICC/iccMAX profiles from XML | `iccFromXml` on PATH |
-| `Testing/RunTests.sh` | Validate profiles with round-trip and CMM apply | All tools on PATH |
-| `Testing/CreateAllProfiles.bat` | Windows equivalent | tools in PATH |
-| `Testing/RunTests.bat` | Windows equivalent | tools in PATH |
+`CreateAllProfiles.sh` and `RunTests.sh` auto-source `Testing/path.sh` when it
+is present, which sets `PATH` and the platform library path to the build output
+directory.
 
-## CI Regression Tests
+## CTest Gate
 
-PoC profiles for automated regression testing live in `.github/ci/regression/`:
+The standard local and CI entry point for tool testing is CTest, configured from
+`Build/Cmake/Testing/CMakeLists.txt`. Build with `ENABLE_TESTS=ON` and
+`ENABLE_TOOLS=ON`, then run:
 
-| File | Issue | Bug |
-|------|-------|----|
-| `poc-599-gbd-sio.icc` | #599 | GBD vertex/triangle signed integer overflow |
-| `poc-744-tonemap-hbo.icc` | #744 | ToneMapFunc Describe heap-buffer-overflow |
-| `poc-763-cenc-huaf.icc` | #763 | cenc profile UAF in AddXform |
-| `poc-769-*.icc` (4 files) | #769 | Unsigned integer overflow in offset+size bounds |
+```bash
+ctest --test-dir build -N --no-tests=error
+ctest --test-dir build --output-on-failure --no-tests=error
+cmake --build build --target check
+```
 
-Naming convention: `poc-{issue#}-{component}-{type}.icc`
+For Visual Studio generators, pass the configuration:
 
-CI workflow `ci-iccdev-tool-tests.yml` Test 18 runs R-sub-tests for these PoCs
-and adjacent script-based regression gates. When adding new PoC files, also add
-a corresponding R-sub-test.
+```cmd
+ctest --test-dir out/vs2022-x64 -C Release -N --no-tests=error
+ctest --test-dir out/vs2022-x64 -C Release --output-on-failure --no-tests=error
+cmake --build out/vs2022-x64 --config Release --target check
+```
 
-Script-based regression gates also live in `.github/scripts/`:
+Linux currently registers 15 CTest suites. Windows currently registers 2 CTest
+suites through `Build/Cmake/Testing/RunWindowsBatchTest.cmake`. The Windows
+wrapper runs the batch scripts from a disposable copy of `Testing/` under the
+build tree and must not dirty the source `Testing/` directory.
 
-| Script | Coverage |
-|--------|----------|
-| `iccdev-json-parser-regression-tests.sh` | JSON parser/config malformed-data and stale-state rejection |
-| `iccdev-stdobserver-regression-tests.sh` | Legacy standard observer aliases through XML and JSON import paths |
+See `docs/ctest.md` for the complete suite list, expected counts, fixtures, and
+add-test process.
 
-CI workflow `ci-tool-tests.yml` runs these gates after the coverage baseline,
-JSON config tests, and JSON CLI exercise. `ci-json-roundtrip.yml` also runs the
-standard observer gate because it covers `IccToJson` and `IccFromJson`.
+CTest registration and workflow count assertions are maintainer-owned. General
+contributors should not edit `Build/Cmake/Testing/` or `.github/workflows/**`
+unless a maintainer explicitly requests that change.
 
-`CreateAllProfiles.sh` and `RunTests.sh` auto-source `Testing/path.sh` if
-present (sets `PATH` and `LD_LIBRARY_PATH`/`DYLD_LIBRARY_PATH` to the build
-output directory).
+## Regression Tests
+
+PoC profiles for automated regression testing live in `.github/ci/regression/`.
+Use `.github/ci/regression/README.md` as the canonical catalog and naming guide.
+
+Script-based gates live in `.github/scripts/`, including:
+
+- `iccdev-json-parser-regression-tests.sh`
+- `iccdev-json-cfg-tests.sh`
+- `iccdev-stdobserver-regression-tests.sh`
+- `iccdev-mluc-setter-regression-tests.sh`
+- `iccdev-mluc-read-utf16-regression-tests.sh`
+- `iccdev-namedcolor-apply-regression-tests.sh`
+- `iccdev-version-bcd-regression-tests.sh`
+
+When adding a new regression input, add the matching script or workflow assertion
+in the same change.
 
 ## Test Profile Directories
 
 | Directory | Content | Used By |
 |-----------|---------|---------|
-| `Testing/Calc/` | Calculator MPE profiles (srgbCalcTest, RGBWProjector, etc.) | RunTests: CalcElement operations |
-| `Testing/CalcTest/` | Calculator operator test data | RunTests: CalcElement validation |
-| `Testing/Display/` | Display profiles (sRGB, Rec2020, Rec2100 HLG, GSDF) | RunTests: observer/display round-trip |
-| `Testing/Encoding/` | 3-channel encoding class profiles | RunTests: encoding validation |
-| `Testing/Named/` | Named color profiles (tints, spectral, fluorescence) | RunTests: NamedColor CMM tests |
-| `Testing/PCC/` | Profile Connection Conditions (observers, illuminants) | RunTests: multi-observer tests |
-| `Testing/SpecRef/` | Spectral reflectance profiles (argbRef, srgbRef) | RunTests: spectral round-trip |
-| `Testing/HDR/` | HDR/HLG/PQ display profiles | RunTests: HDR workflows |
-| `Testing/ICS/` | ICS interoperability conformance profiles | RunTests: ICS validation |
-| `Testing/Overprint/` | Overprint simulation profiles | RunTests: overprint workflows |
-| `Testing/CMYK-3DLUTs/` | CMYK 3D LUT profiles | RunTests: CMYK workflows |
-| `Testing/hybrid/` | Hybrid spectral+colorimetric profiles | RunTests: hybrid workflows |
-| `Testing/mcs/` | Material Color Space profiles | RunTests: MCS workflows |
-| `Testing/ApplyDataFiles/` | Input data files for iccApplyNamedCmm | RunTests: CMM input vectors |
-
-## Test Execution Flow
-
-```
-CreateAllProfiles.sh:
-  1. For each Testing/ subdirectory (Calc, Display, Encoding, Named, PCC, SpecRef, ...)
-  2. Run: iccFromXml <name>.xml <name>.icc
-  3. This converts XML profile definitions into binary ICC profiles
-
-RunTests.sh:
-  1. Run iccApplyNamedCmm with Calc/srgbCalcTest.txt  ->  validates calculator operations
-  2. Run iccApplyNamedCmm with Named/NamedColorTest.txt  ->  validates named color CMM
-     - Tests multiple observer/illuminant combinations (D93/D65/D50 x 2deg/10deg)
-  3. Run iccApplyNamedCmm with various encoding/spectral test vectors
-  4. Run iccRoundTrip on display profiles  ->  validates A2B/B2A round-trip
-  5. Run iccDumpProfile -v  ->  validates profile structure
-```
+| `Testing/Calc/` | Calculator MPE profiles | CalcElement operation tests |
+| `Testing/CalcTest/` | Calculator operator test data | CalcElement validation |
+| `Testing/Display/` | Display profiles | observer/display round-trip |
+| `Testing/Encoding/` | 3-channel encoding profiles | encoding validation |
+| `Testing/Named/` | Named color profiles | NamedColor CMM tests |
+| `Testing/PCC/` | Profile Connection Conditions | multi-observer tests |
+| `Testing/SpecRef/` | Spectral reflectance profiles | spectral round-trip |
+| `Testing/HDR/` | HDR/HLG/PQ display profiles | HDR workflows |
+| `Testing/ICS/` | ICS interoperability profiles | ICS validation |
+| `Testing/Overprint/` | Overprint simulation profiles | overprint workflows |
+| `Testing/CMYK-3DLUTs/` | CMYK 3D LUT profiles | CMYK workflows |
+| `Testing/hybrid/` | Hybrid spectral/colorimetric profiles | hybrid workflows |
+| `Testing/mcs/` | Material Color Space profiles | MCS workflows |
+| `Testing/ApplyDataFiles/` | Input data for `iccApplyNamedCmm` | CMM input vectors |
 
 ## Adding a New Test Profile
 
-1. Create `Testing/<Category>/<Name>.xml`  --  XML representation of the profile
-2. Add `iccFromXml <Name>.xml <Name>.icc` line to `CreateAllProfiles.sh` under
-   the appropriate category section
-3. If the profile needs validation, add test commands to `RunTests.sh`:
-   - `iccDumpProfile -v <Name>.icc` for structural validation
-   - `iccRoundTrip <Name>.icc` for round-trip validation
-   - `iccApplyNamedCmm <data>.txt ... <Name>.icc ...` for CMM tests
-4. Add matching entries to `CreateAllProfiles.bat` and `RunTests.bat`
+1. Create `Testing/<Category>/<Name>.xml`.
+2. Add the `iccFromXml <Name>.xml <Name>.icc` command to
+   `CreateAllProfiles.sh` and `CreateAllProfiles.bat`.
+3. Add validation commands to `RunTests.sh` and `RunTests.bat` as needed:
+   `iccDumpProfile -v`, `iccRoundTrip`, or `iccApplyNamedCmm`.
+4. Add regression PoCs under `.github/ci/regression/` only when they should run
+   in automated CI.
+5. If the profile affects automated coverage, update the relevant expected
+   counts in `docs/ctest.md`, `Build/Cmake/Testing/CMakeLists.txt`, and the
+   workflows that assert CTest or generated-profile totals.
 
-## Validation Output Parsing
+## Maintainer CTest Suite Changes
+
+This process is for iccDEV maintainers. General contributors should describe
+the needed automated coverage in the issue or pull request instead of editing
+CTest or workflow infrastructure directly.
+
+1. Add the focused script under `.github/scripts/` or extend the existing
+   `Testing/*.sh` and `Testing/*.bat` scripts.
+2. Register the test in `Build/Cmake/Testing/CMakeLists.txt`.
+3. Use `FIXTURES_REQUIRED iccdev_profiles` when the test needs generated
+   profiles.
+4. Update Linux CTest count assertions in `ci-tool-tests.yml` and
+   `ci-iccdev-tool-tests.yml` when adding or removing Linux suites.
+5. Update `docs/ctest.md` with the test name, source script, labels, and any
+   count changes.
+
+## Validation Output
 
 `iccDumpProfile -v` validation messages use these prefixes:
-- `Warning!`  --  Non-critical issue (profile still usable)
-- `Error!`  --  Critical issue (profile may not work correctly)
-- `NonCompliant!`  --  Violates ICC specification
 
-Parse the overall status:
+- `Warning!`: non-critical issue
+- `Error!`: critical issue
+- `NonCompliant!`: ICC specification violation
+
+Parse the overall status with:
+
 ```bash
 iccDumpProfile -v profile.icc ALL 2>&1 | grep --text -A 3 "^Validation Report"
 ```
-
-## CI Integration
-
-Test profiles are generated and validated in these CI workflows:
-- `ci-pr-action.yml`  --  CreateAllProfiles + RunTests on every PR
-- `ci-pr-unix.yml`  --  Same on Ubuntu matrix
-- `ci-comprehensive-build-test.yml`  --  Full matrix (GCC, Clang, sanitizers)
-- `ci-sanitizer-tests.yml`  --  Runs tests under ASan/UBSan/TSan/MSan
-
-## Common Pitfalls
-
-- `iccFromXml` must be on PATH  --  scripts use bare command names, not paths
-- Missing `path.sh` causes `command -v iccFromXml` to fail  ->  scripts exit 1
-- Windows `.bat` scripts use different path separators and tool names
-- Some XML files are includes, not standalone  --  `calcImport.xml` and `calcVars.xml`
-  cannot be compiled individually
-- `set -x` / `set -` blocks in CreateAllProfiles.sh toggle verbose output per
-  category  --  preserve this pattern when adding new sections

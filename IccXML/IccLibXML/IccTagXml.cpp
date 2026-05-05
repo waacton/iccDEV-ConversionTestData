@@ -5,7 +5,7 @@
 
     Version:    V1
 
-    Copyright:  © see ICC Software License
+    Copyright:  see ICC Software License
 */
 
 /*
@@ -1108,7 +1108,11 @@ bool CIccTagXmlSparseMatrixArray::ToXml(std::string &xml, std::string blanks/* =
   icUInt32Number bytesPerMatrix = GetBytesPerMatrix();
 
   for (i=0; i<(int)m_nSize; i++) {
-    mtx.Reset(m_RawData+i*bytesPerMatrix, bytesPerMatrix, icSparseMatrixFloatNum, true);
+    if (!mtx.Reset(m_RawData+i*bytesPerMatrix, bytesPerMatrix, icSparseMatrixFloatNum, true) ||
+        mtx.GetNumEntries() > mtx.GetMaxEntries() ||
+        !mtx.IsValid())
+      return false;
+
     snprintf(buf, bufSize, " <SparseMatrix rows=\"%d\" cols=\"%d\">\n", mtx.Rows(), mtx.Cols());
     xml += blanks + buf;
 
@@ -2863,8 +2867,21 @@ bool CIccTagXmlCurve::ParseXml(xmlNode *pNode, icConvertType nType, std::string 
             return false;
           }
 
-          SetSize(num);
+          if (!SetSize(num)) {
+            parseStr += "Out of memory allocating curve data from '";
+            parseStr += filename;
+            parseStr += "'.\n";
+            delete file;
+            return false;
+          }
           icFloatNumber *dst =  GetData(0);
+          if (num && !dst) {
+            parseStr += "Curve data allocation failed for '";
+            parseStr += filename;
+            parseStr += "'.\n";
+            delete file;
+            return false;
+          }
           icUInt32Number i;
           for (i=0; i<num; i++) {
             if (!file->Read8(&value)) { 
@@ -2890,8 +2907,21 @@ bool CIccTagXmlCurve::ParseXml(xmlNode *pNode, icConvertType nType, std::string 
             return false;
           }
 
-          SetSize(num);
+          if (!SetSize(num)) {
+            parseStr += "Out of memory allocating curve data from '";
+            parseStr += filename;
+            parseStr += "'.\n";
+            delete file;
+            return false;
+          }
           icFloatNumber *dst = GetData(0);
+          if (num && !dst) {
+            parseStr += "Curve data allocation failed for '";
+            parseStr += filename;
+            parseStr += "'.\n";
+            delete file;
+            return false;
+          }
           icUInt32Number i;
           for (i=0; i<num; i++) {
             if (!file->Read16(&value)) {  //this assumes data is big endian
@@ -2926,8 +2956,21 @@ bool CIccTagXmlCurve::ParseXml(xmlNode *pNode, icConvertType nType, std::string 
             return false;
           }
 
-          SetSize(num);
+          if (!SetSize(num)) {
+            parseStr += "Out of memory allocating curve data from '";
+            parseStr += filename;
+            parseStr += "'.\n";
+            delete file;
+            return false;
+          }
           icFloatNumber *dst = GetData(0);
+          if (num && !dst) {
+            parseStr += "Curve data allocation failed for '";
+            parseStr += filename;
+            parseStr += "'.\n";
+            delete file;
+            return false;
+          }
 
           icUInt32Number i;
           for (i=0; i<num; i++) {

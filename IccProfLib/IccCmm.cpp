@@ -560,7 +560,8 @@ CIccXform *CIccXform::Create(CIccProfile *pProfile,
       if (bInput) {
         CIccTag *pTag = NULL;
         if (bUseD2BTags) {
-          if (pProfile->m_Header.spectralPCS && nLutType!=icXformLutColorimetric) {
+          if (nLutType != icXformLutColorimetric &&
+              (pProfile->m_Header.spectralPCS || pProfile->m_Header.version >= icVersionNumberV5)) {
             pTag = pProfile->FindTag(icSigDToB0Tag + nTagIntent);
 
             if (!pTag && nTagIntent == icAbsoluteColorimetric) {
@@ -576,7 +577,7 @@ CIccXform *CIccXform::Create(CIccProfile *pProfile,
               }
             }
 
-            if (pTag)
+            if (pTag && pProfile->m_Header.spectralPCS)
               bUseSpectralPCS = true;
 
             if (!pTag) {
@@ -647,16 +648,11 @@ CIccXform *CIccXform::Create(CIccProfile *pProfile,
           pTag = NULL;
 
         if (!pTag) {
-          if (pProfile->m_Header.version < icVersionNumberV5) {
-            //Matrix/TRC profiles are deprecated in v5 profiles
-            if (pProfile->m_Header.colorSpace == icSigRgbData) {
-              rv = CIccXformCreator::CreateXform(icXformTypeMatrixTRC, NULL, pHintManager);
-            }
-            else if (pProfile->m_Header.colorSpace == icSigGrayData) {
-              rv = CIccXformCreator::CreateXform(icXformTypeMonochrome, NULL, pHintManager);
-            }
-            else
-              return NULL;
+          if (pProfile->m_Header.colorSpace == icSigRgbData) {
+            rv = CIccXformCreator::CreateXform(icXformTypeMatrixTRC, NULL, pHintManager);
+          }
+          else if (pProfile->m_Header.colorSpace == icSigGrayData) {
+            rv = CIccXformCreator::CreateXform(icXformTypeMonochrome, NULL, pHintManager);
           }
           else
             return NULL;
@@ -778,15 +774,11 @@ CIccXform *CIccXform::Create(CIccProfile *pProfile,
         }
 
         if (!pTag) {
-          if (pProfile->m_Header.version < icVersionNumberV5) {
-            if (pProfile->m_Header.colorSpace == icSigRgbData) {
-              rv = CIccXformCreator::CreateXform(icXformTypeMatrixTRC, pTag, pHintManager);
-            }
-            else if (pProfile->m_Header.colorSpace == icSigGrayData) {
-              rv = CIccXformCreator::CreateXform(icXformTypeMonochrome, NULL, pHintManager);
-            }
-            else
-              return NULL;
+          if (pProfile->m_Header.colorSpace == icSigRgbData) {
+            rv = CIccXformCreator::CreateXform(icXformTypeMatrixTRC, pTag, pHintManager);
+          }
+          else if (pProfile->m_Header.colorSpace == icSigGrayData) {
+            rv = CIccXformCreator::CreateXform(icXformTypeMonochrome, NULL, pHintManager);
           }
           else
             return NULL;
@@ -932,22 +924,49 @@ CIccXform *CIccXform::Create(CIccProfile *pProfile,
 
       CIccTag *pTag = NULL;
       if (bUseD2BTags) {
-        if (pProfile->m_Header.spectralPCS) {
+        if (pProfile->m_Header.spectralPCS || pProfile->m_Header.version >= icVersionNumberV5) {
 
           pTag = pProfile->FindTag(icSigBRDFDToB0Tag + nTagIntent);
 
-          if (pTag)
+          if (!pTag && nTagIntent == icAbsoluteColorimetric) {
+            pTag = pProfile->FindTag(icSigBRDFDToB1Tag);
+            if (pTag)
+              nTagIntent = icRelativeColorimetric;
+          }
+          else if (!pTag && nTagIntent == icRelativeColorimetric) {
+            pTag = pProfile->FindTag(icSigBRDFDToB3Tag);
+            if (pTag) {
+              nTagIntent = icAbsoluteColorimetric;
+              bAbsToRel = true;
+            }
+          }
+
+          if (pTag && pProfile->m_Header.spectralPCS)
             bUseSpectralPCS = true;
+
+          if (!pTag) {
+            pTag = pProfile->FindTag(icSigBRDFDToB0Tag);
+          }
+          if (!pTag) {
+            pTag = pProfile->FindTag(icSigBRDFDToB1Tag);
+          }
+          if (!pTag) {
+            pTag = pProfile->FindTag(icSigBRDFDToB3Tag);
+            if (pTag) {
+              nTagIntent = icAbsoluteColorimetric;
+              bAbsToRel = true;
+            }
+          }
         }
       }
       else
       {
         pTag = pProfile->FindTag(icSigBRDFAToB0Tag + nTagIntent);
-
-        //Unsupported elements cause fall back behavior
-        if (pTag && !pTag->IsSupported())
-          pTag = NULL;
       }
+
+      //Unsupported elements cause fall back behavior
+      if (pTag && !pTag->IsSupported())
+        pTag = NULL;
 
       if (pTag != NULL)
       {
@@ -6900,7 +6919,8 @@ icStatusCMM CIccXformNamedColor::Apply(CIccApplyXform* pApply, icChar *DstColorN
 
     icFloatNumber DevicePix[16], PCSPix[3];
     std::string NamedColor;
-    icUInt32Number i, j;
+    icUInt32Number i;
+    icInt32Number j;
 
     if (IsSrcPCS()) {
       if (m_bSrcPcsConversion)
@@ -6910,14 +6930,20 @@ icStatusCMM CIccXformNamedColor::Apply(CIccApplyXform* pApply, icChar *DstColorN
         PCSPix[i] = SrcPixel[i];
 
       j = pTag->FindCachedPCSColor(PCSPix);
-      pTag->GetColorName(NamedColor, j);
+      if (j<0 || !pTag->GetColorName(NamedColor, j))
+        return icCmmStatColorNotFound;
     }
     else {
-      for(i=0; i<m_pTag->GetDeviceCoords(); i++)
+      const icUInt32Number nDeviceCoords = pTag->GetDeviceCoords();
+      if (nDeviceCoords > 16)
+        return icCmmStatTooManySamples;
+
+      for(i=0; i<nDeviceCoords; i++)
         DevicePix[i] = SrcPixel[i];
 
       j = pTag->FindDeviceColor(DevicePix);
-      pTag->GetColorName(NamedColor, j);
+      if (j<0 || !pTag->GetColorName(NamedColor, j))
+        return icCmmStatColorNotFound;
     }
 
     snprintf(DstColorName, 256, "%s", NamedColor.c_str());
@@ -9932,7 +9958,10 @@ icStatusCMM CIccApplyNamedColorCmm::Apply(icFloatNumber *DstPixel, const icFloat
           break;
 
         case icApplyPixel2Named:
-          pXform->Apply(pApply, NamedColor, pSrc);
+          rv = pXform->Apply(pApply, NamedColor, pSrc);
+          if (rv) {
+            return rv;
+          }
 #ifdef DEBUG_CMM_APPLY
           printf("Xfm%d: \"%s\"\n", nCount++, NamedColor);
 #endif
@@ -10088,7 +10117,10 @@ icStatusCMM CIccApplyNamedColorCmm::Apply(icFloatNumber *DstPixel, const icFloat
             break;
 
           case icApplyPixel2Named:
-            pXform->Apply(pApply, NamedColor, pSrc);
+            rv = pXform->Apply(pApply, NamedColor, pSrc);
+            if (rv) {
+              return rv;
+            }
             break;
 
           case icApplyNamed2Pixel:
@@ -10213,7 +10245,10 @@ icStatusCMM CIccApplyNamedColorCmm::Apply(icChar* DstColorName, const icFloatNum
           break;
 
         case icApplyPixel2Named:
-          pXform->Apply(pApply, NamedColor, pSrc);
+          rv = pXform->Apply(pApply, NamedColor, pSrc);
+          if (rv) {
+            return rv;
+          }
           break;
 
         case icApplyNamed2Pixel:
@@ -10249,7 +10284,10 @@ icStatusCMM CIccApplyNamedColorCmm::Apply(icChar* DstColorName, const icFloatNum
       switch(pXform->GetInterface()) {
 
       case icApplyPixel2Named:
-        pXform->Apply(pApply, DstColorName, pSrc);
+        rv = pXform->Apply(pApply, DstColorName, pSrc);
+        if (rv) {
+          return rv;
+        }
         break;
 
       case icApplyPixel2Pixel:
@@ -10274,7 +10312,10 @@ icStatusCMM CIccApplyNamedColorCmm::Apply(icChar* DstColorName, const icFloatNum
     }
 
     pXform = (CIccXformNamedColor*)pApplyXform;
-    pXform->Apply(pApply, DstColorName, pSrc);
+    rv = pXform->Apply(pApply, DstColorName, pSrc);
+    if (rv) {
+      return rv;
+    }
   }
 
   return icCmmStatOk;
@@ -10475,7 +10516,10 @@ icStatusCMM CIccApplyNamedColorCmm::Apply(icChar *DstColorName, const icChar *Sr
 
 
         case icApplyPixel2Named:
-          pXform->Apply(pApply, NamedColor, pSrc);
+          rv = pXform->Apply(pApply, NamedColor, pSrc);
+          if (rv) {
+            return rv;
+          }
           break;
 
         case icApplyNamed2Pixel:
@@ -10504,7 +10548,10 @@ icStatusCMM CIccApplyNamedColorCmm::Apply(icChar *DstColorName, const icChar *Sr
       pXform = (CIccXformNamedColor*)pApplyXform;
       switch(pXform->GetInterface()) {
       case icApplyPixel2Named:
-        pXform->Apply(pApply, DstColorName, pSrc);
+        rv = pXform->Apply(pApply, DstColorName, pSrc);
+        if (rv) {
+          return rv;
+        }
         break;
 
       case icApplyPixel2Pixel:

@@ -60,6 +60,7 @@
 #include "IccUtilJson.h"
 #include "IccUtil.h"
 #include "IccTagLut.h"
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <sstream>
@@ -71,9 +72,14 @@
 bool g_IccJsonAllowFileImports = false;
 
 // Safely narrow size_t to icUInt32Number; returns 0 on truncation
-static inline icUInt32Number icJsonSafeU32(size_t n)
+static inline icUInt32Number icJsonSafeU32(size_t n, bool *overflow = nullptr)
 {
-  return (n > (size_t)UINT32_MAX) ? 0 : (icUInt32Number)n;
+  if (n > (size_t)UINT32_MAX) {
+    if (overflow) *overflow = true;
+    return 0;
+  }
+  if (overflow) *overflow = false;
+  return (icUInt32Number)n;
 }
 
 // ---------------------------------------------------------------------------
@@ -302,9 +308,13 @@ icElemTypeSignature icJsonGetElemTypeNameSig(const icChar *szName)
 template <typename T>
 bool jsonToValue(const IccJson &j, T &value)
 {
-  if (j.is_number()) {
-    value = j.get<T>();
-    return true;
+  try {
+    if (j.is_number()) {
+      value = j.get<T>();
+      return true;
+    }
+  }
+  catch (...) {
   }
   return false;
 }
@@ -312,16 +322,24 @@ bool jsonToValue(const IccJson &j, T &value)
 template <>
 bool jsonToValue<bool>(const IccJson &j, bool &value)
 {
-  if (j.is_boolean())         { value = j.get<bool>();            return true; }
-  if (j.is_number_integer())  { value = j.get<int>() != 0;       return true; }
-  if (j.is_number_unsigned()) { value = j.get<unsigned>() != 0;  return true; }
-  if (j.is_number_float())    { value = j.get<float>() > 0.5f;   return true; }
+  try {
+    if (j.is_boolean())         { value = j.get<bool>();            return true; }
+    if (j.is_number_integer())  { value = j.get<int>() != 0;       return true; }
+    if (j.is_number_unsigned()) { value = j.get<unsigned>() != 0;  return true; }
+    if (j.is_number_float())    { value = j.get<float>() > 0.5f;   return true; }
+  }
+  catch (...) {
+  }
   return false;
 }
 
 bool jsonToString(const IccJson &j, std::string &value)
 {
-  if (j.is_string()) { value = j.get<std::string>(); return true; }
+  try {
+    if (j.is_string()) { value = j.get<std::string>(); return true; }
+  }
+  catch (...) {
+  }
   return false;
 }
 
@@ -335,24 +353,33 @@ template <typename T>
 bool jsonToArray(const IccJson &j, T *vals, int n)
 {
   if (!j.is_array()) return false;
-  int nValid = 0;
-  for (int i = 0; i < n && i < (int)j.size(); i++) {
-    if (j[i].is_number()) { vals[i] = j[i].get<T>(); nValid++; }
+  if (n < 0) return false;
+  bool overflow = false;
+  icUInt32Number nSize = icJsonSafeU32(j.size(), &overflow);
+  if (overflow) return false;
+  icUInt32Number nExpected = (icUInt32Number)n;
+  icUInt32Number nLimit = std::min(nExpected, nSize);
+  icUInt32Number nValid = 0;
+  for (icUInt32Number i = 0; i < nLimit; i++) {
+    if (jsonToValue(j[i], vals[i])) nValid++;
   }
-  return nValid == n;
+  return nValid == nExpected;
 }
 
 template <typename T>
 bool jsonToArray(const IccJson &j, std::vector<T> &vals)
 {
   if (!j.is_array()) return false;
-  vals.resize(j.size());
-  int nValid = 0;
-  for (int i = 0; i < (int)j.size(); i++) {
-    if (j[i].is_number()) { vals[i] = j[i].get<T>(); nValid++; }
+  bool overflow = false;
+  icUInt32Number nSize = icJsonSafeU32(j.size(), &overflow);
+  if (overflow) return false;
+  vals.resize(nSize);
+  icUInt32Number nValid = 0;
+  for (icUInt32Number i = 0; i < nSize; i++) {
+    if (jsonToValue(j[i], vals[i])) nValid++;
     else vals[i] = T(0);
   }
-  return nValid == (int)j.size();
+  return nValid == nSize;
 }
 
 bool jsonExistsField(const IccJson &j, const char *field)
@@ -465,10 +492,14 @@ bool CIccJsonArrayType<T, Tsig>::ParseArray(T *buf, icUInt32Number nBufSize,
                                              const IccJson &j)
 {
   if (!j.is_array()) return false;
-  icUInt32Number n = icJsonSafeU32(j.size());
+  bool overflow = false;
+  icUInt32Number n = icJsonSafeU32(j.size(), &overflow);
+  if (overflow) return false;
   if (n > nBufSize) n = nBufSize;
-  for (icUInt32Number i = 0; i < n; i++)
-    buf[i] = j[i].get<T>();
+  for (icUInt32Number i = 0; i < n; i++) {
+    if (!jsonToValue(j[i], buf[i]))
+      return false;
+  }
   return true;
 }
 
@@ -476,11 +507,14 @@ template <class T, icTagTypeSignature Tsig>
 bool CIccJsonArrayType<T, Tsig>::ParseArray(const IccJson &j)
 {
   if (!j.is_array()) return false;
-  icUInt32Number n = icJsonSafeU32(j.size());
-  if (!n && j.size()) return false;
+  bool overflow = false;
+  icUInt32Number n = icJsonSafeU32(j.size(), &overflow);
+  if (overflow) return false;
   if (!SetSize(n)) return false;
-  for (icUInt32Number i = 0; i < n; i++)
-    m_pBuf[i] = j[i].get<T>();
+  for (icUInt32Number i = 0; i < n; i++) {
+    if (!jsonToValue(j[i], m_pBuf[i]))
+      return false;
+  }
   return true;
 }
 

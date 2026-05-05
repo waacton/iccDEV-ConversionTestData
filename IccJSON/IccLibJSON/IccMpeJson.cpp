@@ -65,6 +65,7 @@
 #include "IccSolve.h"
 #include "IccCAM.h"
 #include "IccMpeFactory.h"
+#include <algorithm>
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
@@ -79,6 +80,59 @@ static inline icUInt32Number icJsonSafeU32(size_t n, bool *overflow = nullptr)
   }
   if (overflow) *overflow = false;
   return (icUInt32Number)n;
+}
+
+// Match the defensive cap used by CIccMpeMatrix::Read for user-controlled
+// matrix-family payloads before narrowing channel counts.
+static const int kIccJsonMaxMatrixChannels = 255;
+static const int kIccJsonMaxSpectralSteps = 65535;
+
+static bool icJsonValidMatrixChannels(int nIn, int nOut)
+{
+  return nIn > 0 && nOut > 0 &&
+         nIn <= kIccJsonMaxMatrixChannels &&
+         nOut <= kIccJsonMaxMatrixChannels;
+}
+
+static bool icJsonGetFloatNumber(const IccJson &jv, icFloatNumber &v)
+{
+  try {
+    if (jv.is_number()) {
+      v = (icFloatNumber)jv.get<double>();
+      return true;
+    }
+  }
+  catch (...) {
+  }
+  return false;
+}
+
+static bool icJsonGetBoolValue(const IccJson &jv, bool &v)
+{
+  try {
+    if (jv.is_boolean()) {
+      v = jv.get<bool>();
+      return true;
+    }
+  }
+  catch (...) {
+  }
+  return false;
+}
+
+static bool icJsonGetRequiredFloat(const IccJson &j, const char *field,
+                                   icFloatNumber &v, std::string &parseStr,
+                                   const char *context)
+{
+  if (!j.contains(field)) {
+    parseStr += std::string("Missing ") + field + " in " + context + "\n";
+    return false;
+  }
+  if (!icJsonGetFloatNumber(j[field], v)) {
+    parseStr += std::string("Invalid ") + field + " in " + context + "\n";
+    return false;
+  }
+  return true;
 }
 
 #ifdef USEICCDEVNAMESPACE
@@ -175,7 +229,8 @@ public:
     if (m_nReserved2)
       j["reserved2"]  = (int)m_nReserved2;
     IccJson params = IccJson::array();
-    for (int i = 0; i < m_nParameters; i++)
+    const int nParameters = (int)m_nParameters;
+    for (int i = 0; i < nParameters; i++)
       params.push_back((double)m_params[i]);
     j["parameters"] = params;
     return true;
@@ -203,9 +258,19 @@ public:
       if (!m_params) return false;
       for (int i = 0; i < nParams; i++) m_params[i] = 0.0f;
       if (jsonExistsField(j, "parameters") && j["parameters"].is_array()) {
-        int cnt = std::min(nParams, (int)j["parameters"].size());
-        for (int i = 0; i < cnt; i++)
-          m_params[i] = (icFloatNumber)j["parameters"][i].get<double>();
+        bool overflow = false;
+        icUInt32Number nJsonParams = icJsonSafeU32(j["parameters"].size(), &overflow);
+        if (overflow) {
+          parseStr += "parameters count exceeds supported range in FormulaSegment\n";
+          return false;
+        }
+        int cnt = std::min(nParams, (int)nJsonParams);
+        for (int i = 0; i < cnt; i++) {
+          if (!icJsonGetFloatNumber(j["parameters"][i], m_params[i])) {
+            parseStr += "parameters contains non-numeric value in FormulaSegment\n";
+            return false;
+          }
+        }
       }
     }
     return true;
@@ -224,7 +289,8 @@ public:
   bool ToJson(IccJson &j) const {
     j["type"] = "SampledSegment";
     IccJson samples = IccJson::array();
-    for (icUInt32Number i = 0; i < m_nCount; i++)
+    const icUInt32Number nCount = m_nCount;
+    for (icUInt32Number i = 0; i < nCount; i++)
       samples.push_back((double)m_pSamples[i]);
     j["samples"] = samples;
     return true;
@@ -238,8 +304,12 @@ public:
     const IccJson &arr = j["samples"];
     if (!SetSize(icJsonSafeU32(arr.size())))
       return false;
-    for (icUInt32Number i = 0; i < icJsonSafeU32(arr.size()); i++)
-      m_pSamples[i] = (icFloatNumber)arr[i].get<double>();
+    for (icUInt32Number i = 0; i < icJsonSafeU32(arr.size()); i++) {
+      if (!icJsonGetFloatNumber(arr[i], m_pSamples[i])) {
+        parseStr += "samples contains non-numeric value in SampledSegment\n";
+        return false;
+      }
+    }
     return true;
   }
 };
@@ -329,15 +399,24 @@ public:
     if (m_nReserved)
       j["reserved"] = (int)m_nReserved;
     IccJson samples = IccJson::array();
-    for (icUInt32Number i = 0; i < m_nCount; i++)
+    const icUInt32Number nCount = m_nCount;
+    for (icUInt32Number i = 0; i < nCount; i++)
       samples.push_back((double)m_pSamples[i]);
     j["samples"] = samples;
     return true;
   }
 
   bool ParseJson(const IccJson &j, std::string &parseStr) {
-    icFloatNumber first = j.contains("firstEntry") ? (icFloatNumber)j["firstEntry"].get<double>() : 0.0f;
-    icFloatNumber last  = j.contains("lastEntry")  ? (icFloatNumber)j["lastEntry"].get<double>()  : 1.0f;
+    icFloatNumber first = 0.0f;
+    icFloatNumber last = 1.0f;
+    if (j.contains("firstEntry") && !icJsonGetFloatNumber(j["firstEntry"], first)) {
+      parseStr += "firstEntry must be numeric in SingleSampledCurve\n";
+      return false;
+    }
+    if (j.contains("lastEntry") && !icJsonGetFloatNumber(j["lastEntry"], last)) {
+      parseStr += "lastEntry must be numeric in SingleSampledCurve\n";
+      return false;
+    }
     SetRange(first, last);
 
     int storageType   = (int)icValueTypeFloat32;
@@ -357,8 +436,12 @@ public:
     const IccJson &arr = j["samples"];
     if (!SetSize(icJsonSafeU32(arr.size())))
       return false;
-    for (icUInt32Number i = 0; i < icJsonSafeU32(arr.size()); i++)
-      m_pSamples[i] = (icFloatNumber)arr[i].get<double>();
+    for (icUInt32Number i = 0; i < icJsonSafeU32(arr.size()); i++) {
+      if (!icJsonGetFloatNumber(arr[i], m_pSamples[i])) {
+        parseStr += "samples contains non-numeric value in SingleSampledCurve\n";
+        return false;
+      }
+    }
     return true;
   }
 };
@@ -397,8 +480,16 @@ public:
   }
 
   bool ParseJson(const IccJson &j, std::string &parseStr) {
-    icFloatNumber first = j.contains("firstEntry") ? (icFloatNumber)j["firstEntry"].get<double>() : 0.0f;
-    icFloatNumber last  = j.contains("lastEntry")  ? (icFloatNumber)j["lastEntry"].get<double>()  : 1.0f;
+    icFloatNumber first = 0.0f;
+    icFloatNumber last = 1.0f;
+    if (j.contains("firstEntry") && !icJsonGetFloatNumber(j["firstEntry"], first)) {
+      parseStr += "firstEntry must be numeric in SampledCalculatorCurve\n";
+      return false;
+    }
+    if (j.contains("lastEntry") && !icJsonGetFloatNumber(j["lastEntry"], last)) {
+      parseStr += "lastEntry must be numeric in SampledCalculatorCurve\n";
+      return false;
+    }
     SetRange(first, last);
 
     int extensionType = 0, desiredSize = 256, reserved2 = 0;
@@ -714,7 +805,8 @@ bool CIccJsonToneMapFunc::ToJson(IccJson &j)
   if (m_nReserved2)
     j["reserved2"] = (int)m_nReserved2;
   IccJson params = IccJson::array();
-  for (icUInt8Number i = 0; i < m_nParameters; i++)
+  const int nParameters = (int)m_nParameters;
+  for (int i = 0; i < nParameters; i++)
     params.push_back((double)m_params[i]);
   j["parameters"] = params;
   return true;
@@ -738,12 +830,23 @@ bool CIccJsonToneMapFunc::ParseJson(const IccJson &j, std::string &parseStr)
   if (m_params) { free(m_params); m_params = nullptr; }
   m_params = (icFloatNumber*)malloc(m_nParameters * sizeof(icFloatNumber));
   if (!m_params) return false;
-  for (int i = 0; i < m_nParameters; i++) m_params[i] = 0.0f;
+  const int nParameters = (int)m_nParameters;
+  for (int i = 0; i < nParameters; i++) m_params[i] = 0.0f;
 
   if (j.contains("parameters") && j["parameters"].is_array()) {
-    int cnt = std::min((int)m_nParameters, (int)j["parameters"].size());
-    for (int i = 0; i < cnt; i++)
-      m_params[i] = (icFloatNumber)j["parameters"][i].get<double>();
+    bool overflow = false;
+    icUInt32Number nJsonParams = icJsonSafeU32(j["parameters"].size(), &overflow);
+    if (overflow) {
+      parseStr += "parameters count exceeds supported range in ToneMapFunction\n";
+      return false;
+    }
+    int cnt = std::min(nParameters, (int)nJsonParams);
+    for (int i = 0; i < cnt; i++) {
+      if (!icJsonGetFloatNumber(j["parameters"][i], m_params[i])) {
+        parseStr += "parameters contains non-numeric value in ToneMapFunction\n";
+        return false;
+      }
+    }
   }
   return true;
 }
@@ -767,7 +870,8 @@ bool CIccMpeJsonToneMap::ToJson(IccJson &j)
 
   // Tone map functions (with duplicate detection)
   IccJson funcs = IccJson::array();
-  for (int i = 0; i < (int)m_nOutputChannels; i++) {
+  const int nOutputChannels = (int)m_nOutputChannels;
+  for (int i = 0; i < nOutputChannels; i++) {
     int dupIdx = -1;
     for (int k = 0; k < i; k++) {
       if (m_pToneFuncs[i] == m_pToneFuncs[k]) { dupIdx = k; break; }
@@ -870,15 +974,16 @@ bool CIccMpeJsonMatrix::ToJson(IccJson &j)
   if (m_pMatrix) {
     IccJson matrix = IccJson::array();
     icUInt64Number nEntries64 = (icUInt64Number)m_nInputChannels * m_nOutputChannels;
-    if (nEntries64 > 0xFFFFFFFFUL) return false;
     icUInt32Number nEntries = (icUInt32Number)nEntries64;
     for (icUInt32Number i = 0; i < nEntries; i++)
       matrix.push_back((double)m_pMatrix[i]);
     j["matrix"] = matrix;
   }
-  if (m_pConstants && m_bApplyConstants) {
+  // Preserve serialized matrix constants even when they are all zero.
+  if (m_pConstants) {
     IccJson constants = IccJson::array();
-    for (icUInt16Number i = 0; i < m_nOutputChannels; i++)
+    const icUInt16Number nOutputChannels = m_nOutputChannels;
+    for (icUInt16Number i = 0; i < nOutputChannels; i++)
       constants.push_back((double)m_pConstants[i]);
     j["constants"] = constants;
   }
@@ -890,20 +995,58 @@ bool CIccMpeJsonMatrix::ParseJson(const IccJson &j, std::string &parseStr)
   int nInInt = 0, nOutInt = 0;
   jGetValue(j, "inputChannels",  nInInt);
   jGetValue(j, "outputChannels", nOutInt);
+
+  if (!icJsonValidMatrixChannels(nInInt, nOutInt)) {
+    parseStr += "Invalid inputChannels or outputChannels in MatrixElement\n";
+    return false;
+  }
+
   icUInt16Number nIn  = (icUInt16Number)nInInt;
   icUInt16Number nOut = (icUInt16Number)nOutInt;
+  icUInt64Number nEntries64 = (icUInt64Number)nIn * nOut;
+  if (nEntries64 > 0xFFFFFFFFUL) {
+    parseStr += "MatrixElement size is too large\n";
+    return false;
+  }
+  icUInt32Number nEntries = (icUInt32Number)nEntries64;
 
+  if (j.contains("matrix") && !j["matrix"].is_array()) {
+    parseStr += "matrix must be an array in MatrixElement\n";
+    return false;
+  }
+  if (j.contains("constants") && !j["constants"].is_array()) {
+    parseStr += "constants must be an array in MatrixElement\n";
+    return false;
+  }
+
+  bool bHasMatrix = j.contains("matrix") && j["matrix"].is_array();
   bool bHasConstants = j.contains("constants") && j["constants"].is_array();
-  if (!SetSize(nIn, nOut, bHasConstants)) return false;
 
-  if (j.contains("matrix") && j["matrix"].is_array()) {
+  if (bHasMatrix && j["matrix"].size() != nEntries64) {
+    parseStr += "matrix count does not match MatrixElement size\n";
+    return false;
+  }
+  if (bHasConstants && j["constants"].size() != nOut) {
+    parseStr += "constants count does not match MatrixElement outputChannels\n";
+    return false;
+  }
+
+  // Matrix elements require constants in serialized ICC data. For older JSON
+  // that omitted all-zero constants, allocate them and leave them zero-filled.
+  if (!SetSize(nIn, nOut, bHasMatrix || bHasConstants)) return false;
+
+  if (bHasMatrix) {
     const IccJson &mat = j["matrix"];
-    icUInt32Number nEntries = nIn * nOut;
-    for (icUInt32Number i = 0; i < nEntries && i < icJsonSafeU32(mat.size()); i++)
-      m_pMatrix[i] = (icFloatNumber)mat[i].get<double>();
+    for (icUInt32Number i = 0; i < nEntries; i++) {
+      if (!icJsonGetFloatNumber(mat[i], m_pMatrix[i])) {
+        parseStr += "matrix contains non-numeric value in MatrixElement\n";
+        return false;
+      }
+    }
 
-    bool bInvert = j.contains("invertMatrix") && j["invertMatrix"].is_boolean()
-                   ? j["invertMatrix"].get<bool>() : false;
+    bool bInvert = false;
+    if (j.contains("invertMatrix"))
+      icJsonGetBoolValue(j["invertMatrix"], bInvert);
     if (bInvert) {
       if (nIn != nOut) {
         parseStr += "Inversion of matrix requires square matrix\n";
@@ -918,8 +1061,12 @@ bool CIccMpeJsonMatrix::ParseJson(const IccJson &j, std::string &parseStr)
   }
   if (bHasConstants) {
     const IccJson &con = j["constants"];
-    for (icUInt16Number i = 0; i < nOut && i < con.size(); i++)
-      m_pConstants[i] = (icFloatNumber)con[i].get<double>();
+    for (icUInt16Number i = 0; i < nOut; i++) {
+      if (!icJsonGetFloatNumber(con[i], m_pConstants[i])) {
+        parseStr += "constants contains non-numeric value in MatrixElement\n";
+        return false;
+      }
+    }
   }
   return true;
 }
@@ -1092,40 +1239,34 @@ static bool icCAMParamsFromJson(const IccJson &j, std::string &parseStr, CIccCam
     return false;
   }
   icFloatNumber xyz[3];
-  xyz[0] = (icFloatNumber)jCAM["whitePoint"][0].get<double>();
-  xyz[1] = (icFloatNumber)jCAM["whitePoint"][1].get<double>();
-  xyz[2] = (icFloatNumber)jCAM["whitePoint"][2].get<double>();
+  if (!icJsonGetFloatNumber(jCAM["whitePoint"][0], xyz[0]) ||
+      !icJsonGetFloatNumber(jCAM["whitePoint"][1], xyz[1]) ||
+      !icJsonGetFloatNumber(jCAM["whitePoint"][2], xyz[2])) {
+    parseStr += "whitePoint contains non-numeric value in colorAppearanceParams\n";
+    return false;
+  }
   pCAM->SetParameter_WhitePoint(xyz);
 
-  if (!jCAM.contains("luminance")) {
-    parseStr += "Missing luminance in colorAppearanceParams\n";
+  icFloatNumber param = 0.0f;
+  if (!icJsonGetRequiredFloat(jCAM, "luminance", param, parseStr, "colorAppearanceParams"))
     return false;
-  }
-  pCAM->SetParameter_La((icFloatNumber)jCAM["luminance"].get<double>());
+  pCAM->SetParameter_La(param);
 
-  if (!jCAM.contains("backgroundLuminance")) {
-    parseStr += "Missing backgroundLuminance in colorAppearanceParams\n";
+  if (!icJsonGetRequiredFloat(jCAM, "backgroundLuminance", param, parseStr, "colorAppearanceParams"))
     return false;
-  }
-  pCAM->SetParameter_Yb((icFloatNumber)jCAM["backgroundLuminance"].get<double>());
+  pCAM->SetParameter_Yb(param);
 
-  if (!jCAM.contains("impactSurround")) {
-    parseStr += "Missing impactSurround in colorAppearanceParams\n";
+  if (!icJsonGetRequiredFloat(jCAM, "impactSurround", param, parseStr, "colorAppearanceParams"))
     return false;
-  }
-  pCAM->SetParameter_C((icFloatNumber)jCAM["impactSurround"].get<double>());
+  pCAM->SetParameter_C(param);
 
-  if (!jCAM.contains("chromaticInductionFactor")) {
-    parseStr += "Missing chromaticInductionFactor in colorAppearanceParams\n";
+  if (!icJsonGetRequiredFloat(jCAM, "chromaticInductionFactor", param, parseStr, "colorAppearanceParams"))
     return false;
-  }
-  pCAM->SetParameter_Nc((icFloatNumber)jCAM["chromaticInductionFactor"].get<double>());
+  pCAM->SetParameter_Nc(param);
 
-  if (!jCAM.contains("adaptationFactor")) {
-    parseStr += "Missing adaptationFactor in colorAppearanceParams\n";
+  if (!icJsonGetRequiredFloat(jCAM, "adaptationFactor", param, parseStr, "colorAppearanceParams"))
     return false;
-  }
-  pCAM->SetParameter_F((icFloatNumber)jCAM["adaptationFactor"].get<double>());
+  pCAM->SetParameter_F(param);
 
   return true;
 }
@@ -1824,7 +1965,8 @@ bool CIccMpeJsonCalculator::ToJson(IccJson &j)
       elemObj["outputChannels"] = (int)m_SubElem[i]->NumOutputChannels();
       if (m_SubElem[i]->m_nReserved)
         elemObj["Reserved"] = (int)m_SubElem[i]->m_nReserved;
-      pJsonMpe->ToJson(elemObj);
+      if (!pJsonMpe->ToJson(elemObj))
+        return false;
       elems.push_back(elemObj);
     }
     j["subElements"] = elems;
@@ -1913,7 +2055,7 @@ bool CIccMpeJsonCalculator::ParseJson(const IccJson &j, std::string &parseStr)
   icFuncParseStatus stat = SetCalcFunc(flatFunc.c_str(), parseStr);
   if (stat != icFuncParseNoError) {
     char buf[65];
-    int len = std::min(64, (int)flatFunc.size());
+    size_t len = std::min(sizeof(buf) - 1, flatFunc.size());
     strncpy(buf, flatFunc.c_str(), len);
     buf[len] = 0;
     switch (stat) {
@@ -1962,8 +2104,8 @@ static bool icSpectralRangeFromJson(const IccJson &j, icSpectralRange &range, st
   jGetValue(jw, "start", dStart);
   jGetValue(jw, "end",   dEnd);
   jGetValue(jw, "steps", nSteps);
-  if (!nSteps) {
-    parseStr += "Invalid spectral range (steps==0)\n";
+  if (dStart >= dEnd || nSteps < 2 || nSteps > kIccJsonMaxSpectralSteps) {
+    parseStr += "Invalid spectral range (steps out of range)\n";
     return false;
   }
   range.start = icFtoF16((icFloat32Number)dStart);
@@ -1994,16 +2136,15 @@ static bool icFloatArrayFromJson(const IccJson &j, const char *field,
     return false;
   }
   const IccJson &arr = j[field];
-  if ((int)arr.size() != n) {
+  if (n < 0 || arr.size() != (size_t)n) {
     parseStr += std::string(field) + " count does not match spectral element size\n";
     return false;
   }
   for (int i = 0; i < n; i++) {
-    if (!arr[i].is_number()) {
+    if (!icJsonGetFloatNumber(arr[i], buf[i])) {
       parseStr += std::string(field) + " contains non-numeric value in spectral element\n";
       return false;
     }
-    buf[i] = (icFloatNumber)arr[i].get<double>();
   }
   return true;
 }
@@ -2034,8 +2175,12 @@ static bool icSpectralMatrixFromJson(const IccJson &j, CIccMpeSpectralMatrix *pM
   int nIn = 0, nOut = 0;
   jGetValue(j, "inputChannels",  nIn);
   jGetValue(j, "outputChannels", nOut);
-  if (!nIn || !nOut) {
+  if (!icJsonValidMatrixChannels(nIn, nOut)) {
     parseStr += "Invalid inputChannels or outputChannels in spectral matrix element\n";
+    return false;
+  }
+  if (nVectors <= 0 || nVectors > kIccJsonMaxMatrixChannels) {
+    parseStr += "Invalid vector count in spectral matrix element\n";
     return false;
   }
 
@@ -2043,22 +2188,30 @@ static bool icSpectralMatrixFromJson(const IccJson &j, CIccMpeSpectralMatrix *pM
   if (!icSpectralRangeFromJson(j, range, parseStr))
     return false;
 
+  const int nSteps = (int)range.steps;
+  icUInt64Number nMatrixValues64 = (icUInt64Number)nVectors * range.steps;
+  if (nMatrixValues64 > 0x7fffffffUL) {
+    parseStr += "spectral matrix element size is too large\n";
+    return false;
+  }
+  int nMatrixValues = (int)nMatrixValues64;
+
   if (!pMtx->SetSize((icUInt16Number)nIn, (icUInt16Number)nOut, range)) {
     parseStr += "Unable to SetSize in spectral matrix element\n";
     return false;
   }
 
-  if (!icFloatArrayFromJson(j, "whiteData", pMtx->GetWhite(), range.steps, parseStr))
+  if (!icFloatArrayFromJson(j, "whiteData", pMtx->GetWhite(), nSteps, parseStr))
     return false;
-  if (!icFloatArrayFromJson(j, "matrixData", pMtx->GetMatrix(), nVectors * range.steps, parseStr))
+  if (!icFloatArrayFromJson(j, "matrixData", pMtx->GetMatrix(), nMatrixValues, parseStr))
     return false;
   // offsetData optional -- zero-fill if absent
   if (j.contains("offsetData")) {
-    if (!icFloatArrayFromJson(j, "offsetData", pMtx->GetOffset(), range.steps, parseStr, false))
+    if (!icFloatArrayFromJson(j, "offsetData", pMtx->GetOffset(), nSteps, parseStr, false))
       return false;
   }
   else {
-    memset(pMtx->GetOffset(), 0, range.steps * sizeof(icFloatNumber));
+    memset(pMtx->GetOffset(), 0, nSteps * sizeof(icFloatNumber));
   }
   return true;
 }
@@ -2071,8 +2224,13 @@ bool CIccMpeJsonEmissionMatrix::ToJson(IccJson &j)
 bool CIccMpeJsonEmissionMatrix::ParseJson(const IccJson &j, std::string &parseStr)
 {
   // For EmissionMatrix numVectors() == m_nInputChannels; parse nIn first then pass it
-  int nIn = 0;
+  int nIn = 0, nOut = 0;
   jGetValue(j, "inputChannels", nIn);
+  jGetValue(j, "outputChannels", nOut);
+  if (nIn < 1 || nOut != 3) {
+    parseStr += "Invalid inputChannels or outputChannels in EmissionMatrixElement\n";
+    return false;
+  }
   return icSpectralMatrixFromJson(j, this, nIn, parseStr);
 }
 
@@ -2084,8 +2242,13 @@ bool CIccMpeJsonInvEmissionMatrix::ToJson(IccJson &j)
 bool CIccMpeJsonInvEmissionMatrix::ParseJson(const IccJson &j, std::string &parseStr)
 {
   // For InvEmissionMatrix numVectors() == m_nOutputChannels; parse nOut first then pass it
-  int nOut = 0;
+  int nIn = 0, nOut = 0;
+  jGetValue(j, "inputChannels", nIn);
   jGetValue(j, "outputChannels", nOut);
+  if (nIn != 3 || nOut != 3) {
+    parseStr += "Invalid inputChannels or outputChannels in InvEmissionMatrixElement\n";
+    return false;
+  }
   return icSpectralMatrixFromJson(j, this, nOut, parseStr);
 }
 

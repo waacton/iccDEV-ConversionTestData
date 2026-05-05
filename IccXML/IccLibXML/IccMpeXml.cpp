@@ -68,6 +68,7 @@
 #include "IccXmlConfig.h"
 #include "IccCAM.h"
 
+#include <algorithm>
 #include <new>     /* std::nothrow */
 #include <cstring> /* C strings strcpy, memcpy ... */
 
@@ -81,6 +82,50 @@
 #ifdef USEICCDEVNAMESPACE
 namespace iccDEV {
 #endif
+
+// Match the defensive cap used by CIccMpeMatrix::Read before narrowing
+// user-controlled matrix-family XML channel counts.
+static const icUInt16Number kIccXmlMaxMatrixChannels = 255;
+static const int kIccXmlMaxSpectralSteps = 65535;
+
+static int icXmlBoundedSpectralSteps(const icSpectralRange &range)
+{
+  return std::min<int>((int)range.steps, kIccXmlMaxSpectralSteps);
+}
+
+static bool icXmlParseMatrixChannels(xmlNode *pNode, icUInt16Number &nInputChannels,
+                                     icUInt16Number &nOutputChannels,
+                                     const char *elementName, std::string &parseStr)
+{
+  if (!icXmlParseU16(icXmlAttrValue(pNode, "InputChannels"), nInputChannels,
+                     kIccXmlMaxMatrixChannels) ||
+      !icXmlParseU16(icXmlAttrValue(pNode, "OutputChannels"), nOutputChannels,
+                     kIccXmlMaxMatrixChannels) ||
+      !nInputChannels || !nOutputChannels) {
+    parseStr += std::string("Invalid InputChannels or OutputChannels In ") + elementName + "\n";
+    return false;
+  }
+
+  return true;
+}
+
+static bool icXmlParseSpectralRange(xmlNode *pNode, icSpectralRange &range,
+                                    std::string &parseStr)
+{
+  icFloatNumber dStart = (icFloatNumber)atof(icXmlAttrValue(pNode, "start"));
+  icFloatNumber dEnd = (icFloatNumber)atof(icXmlAttrValue(pNode, "end"));
+  icUInt16Number nSteps = 0;
+
+  if (dStart >= dEnd || !icXmlParseU16(icXmlAttrValue(pNode, "steps"), nSteps) || nSteps < 2) {
+    parseStr += "Invalid Spectral Range\n";
+    return false;
+  }
+
+  range.start = icFtoF16(dStart);
+  range.end = icFtoF16(dEnd);
+  range.steps = nSteps;
+  return true;
+}
 
 bool CIccMpeXmlUnknown::ToXml(std::string &xml, std::string blanks/* = ""*/)
 {
@@ -1368,10 +1413,10 @@ bool CIccMpeXmlMatrix::ToXml(std::string &xml, std::string blanks/* = ""*/)
 
 bool CIccMpeXmlMatrix::ParseXml(xmlNode *pNode, std::string &parseStr)
 {
-  icUInt16Number nInputChannels = atoi(icXmlAttrValue(pNode, "InputChannels"));
-  icUInt16Number nOutputChannels = atoi(icXmlAttrValue(pNode, "OutputChannels"));
-  if (!nInputChannels || !nOutputChannels) {
-    parseStr += "Invalid InputChannels or OutputChannels In MatrixElement\n";
+  icUInt16Number nInputChannels = 0;
+  icUInt16Number nOutputChannels = 0;
+  if (!icXmlParseMatrixChannels(pNode, nInputChannels, nOutputChannels,
+                                "MatrixElement", parseStr)) {
     return false;
   }
 
@@ -1381,7 +1426,8 @@ bool CIccMpeXmlMatrix::ParseXml(xmlNode *pNode, std::string &parseStr)
   if (pData) {
     SetSize(nInputChannels, nOutputChannels);
 
-    if (!CIccFloatArray::ParseArray(m_pMatrix, m_nInputChannels*m_nOutputChannels, pData->children))
+    icUInt32Number nMatrixEntries = (icUInt32Number)nInputChannels * nOutputChannels;
+    if (!CIccFloatArray::ParseArray(m_pMatrix, nMatrixEntries, pData->children))
       return false;
 
     const char *invert = icXmlAttrValue(pData, "InvertMatrix", "false");
@@ -1414,6 +1460,7 @@ bool CIccMpeXmlEmissionMatrix::ToXml(std::string &xml, std::string blanks/* = ""
 {
   const size_t bufSize = 128;
   char buf[bufSize];
+  const int nSteps = icXmlBoundedSpectralSteps(m_Range);
   snprintf(buf, bufSize, "<EmissionMatrixElement InputChannels=\"%d\" OutputChannels=\"%d\"", NumInputChannels(), NumOutputChannels());
   xml += blanks + buf;
 
@@ -1423,7 +1470,7 @@ bool CIccMpeXmlEmissionMatrix::ToXml(std::string &xml, std::string blanks/* = ""
   }
   xml += ">\n";
 
-  snprintf(buf, bufSize, "  <Wavelengths start=\"" icXmlHalfFmt "\" end=\"" icXmlHalfFmt "\" steps=\"%d\"/>\n", icF16toF(m_Range.start), icF16toF(m_Range.end), m_Range.steps);
+  snprintf(buf, bufSize, "  <Wavelengths start=\"" icXmlHalfFmt "\" end=\"" icXmlHalfFmt "\" steps=\"%d\"/>\n", icF16toF(m_Range.start), icF16toF(m_Range.end), nSteps);
   xml += blanks + buf;
 
   int i, j, n;
@@ -1432,7 +1479,7 @@ bool CIccMpeXmlEmissionMatrix::ToXml(std::string &xml, std::string blanks/* = ""
     xml += blanks + "  <WhiteData>\n";
 
     xml += blanks + "   ";
-    for (i=0; i<(int)m_Range.steps; i++) {
+    for (i=0; i<nSteps; i++) {
       snprintf(buf, bufSize, " " icXmlFloatFmt, m_pWhite[i]);
       xml += buf;
     }
@@ -1446,7 +1493,7 @@ bool CIccMpeXmlEmissionMatrix::ToXml(std::string &xml, std::string blanks/* = ""
 
     for (n=0, j=0; j<numVectors(); j++) {
       xml += blanks + "   ";
-      for (i=0; i<(int)m_Range.steps; i++, n++) {
+      for (i=0; i<nSteps; i++, n++) {
         snprintf(buf, bufSize, " " icXmlFloatFmt, m_pMatrix[n]);
         xml += buf;
       }
@@ -1459,7 +1506,7 @@ bool CIccMpeXmlEmissionMatrix::ToXml(std::string &xml, std::string blanks/* = ""
     xml += blanks + "  <OffsetData>\n";
 
     xml += blanks + "   ";
-    for (i=0; i<(int)m_Range.steps; i++) {
+    for (i=0; i<nSteps; i++) {
       snprintf(buf, bufSize, " " icXmlFloatFmt, m_pOffset[i]);
       xml += buf;
     }
@@ -1476,11 +1523,14 @@ bool CIccMpeXmlEmissionMatrix::ToXml(std::string &xml, std::string blanks/* = ""
 
 bool CIccMpeXmlEmissionMatrix::ParseXml(xmlNode *pNode, std::string &parseStr)
 {
-  icUInt16Number nInputChannels = atoi(icXmlAttrValue(pNode, "InputChannels"));
-  icUInt16Number nOutputChannels = atoi(icXmlAttrValue(pNode, "OutputChannels"));
-
-  if (!nInputChannels || !nOutputChannels) {
-    parseStr += "Invalid InputChannels or OutputChannels In MatrixElement\n";
+  icUInt16Number nInputChannels = 0;
+  icUInt16Number nOutputChannels = 0;
+  if (!icXmlParseMatrixChannels(pNode, nInputChannels, nOutputChannels,
+                                "EmissionMatrixElement", parseStr)) {
+    return false;
+  }
+  if (nOutputChannels != 3) {
+    parseStr += "Invalid OutputChannels In EmissionMatrixElement\n";
     return false;
   }
 
@@ -1488,17 +1538,8 @@ bool CIccMpeXmlEmissionMatrix::ParseXml(xmlNode *pNode, std::string &parseStr)
 
   pData = icXmlFindNode(pNode->children, "Wavelengths");
   if (pData) {
-    icFloatNumber dStart = (icFloatNumber)atof(icXmlAttrValue(pData, "start"));
-    icFloatNumber dEnd = (icFloatNumber)atof(icXmlAttrValue(pData, "end"));
-    icUInt16Number nSteps = atoi(icXmlAttrValue(pData, "steps"));
-
-    if (!nSteps) {
-      parseStr += "Invalid Spectral Range\n";
+    if (!icXmlParseSpectralRange(pData, m_Range, parseStr))
       return false;
-    }
-    m_Range.start = icFtoF16(dStart);
-    m_Range.end = icFtoF16(dEnd);
-    m_Range.steps = nSteps;
   }
 
   SetSize(nInputChannels, nOutputChannels, m_Range);
@@ -1542,6 +1583,7 @@ bool CIccMpeXmlInvEmissionMatrix::ToXml(std::string &xml, std::string blanks/* =
 {
   const size_t bufSize = 128;
   char buf[bufSize];
+  const int nSteps = icXmlBoundedSpectralSteps(m_Range);
   snprintf(buf, bufSize, "<InvEmissionMatrixElement InputChannels=\"%d\" OutputChannels=\"%d\"", NumInputChannels(), NumOutputChannels());
   xml += blanks + buf;
 
@@ -1551,7 +1593,7 @@ bool CIccMpeXmlInvEmissionMatrix::ToXml(std::string &xml, std::string blanks/* =
   }
   xml += ">\n";
 
-  snprintf(buf, bufSize, "  <Wavelengths start=\"" icXmlHalfFmt "\" end=\"" icXmlHalfFmt "\" steps=\"%d\"/>\n", icF16toF(m_Range.start), icF16toF(m_Range.end), m_Range.steps);
+  snprintf(buf, bufSize, "  <Wavelengths start=\"" icXmlHalfFmt "\" end=\"" icXmlHalfFmt "\" steps=\"%d\"/>\n", icF16toF(m_Range.start), icF16toF(m_Range.end), nSteps);
   xml += blanks + buf;
 
   int i, j, n;
@@ -1560,7 +1602,7 @@ bool CIccMpeXmlInvEmissionMatrix::ToXml(std::string &xml, std::string blanks/* =
     xml += blanks + "  <WhiteData>\n";
 
     xml += blanks + "   ";
-    for (i=0; i<(int)m_Range.steps; i++) {
+    for (i=0; i<nSteps; i++) {
       snprintf(buf, bufSize, " " icXmlFloatFmt, m_pWhite[i]);
       xml += buf;
     }
@@ -1574,7 +1616,7 @@ bool CIccMpeXmlInvEmissionMatrix::ToXml(std::string &xml, std::string blanks/* =
 
     for (n=0, j=0; j<numVectors(); j++) {
       xml += blanks + "   ";
-      for (i=0; i<(int)m_Range.steps; i++, n++) {
+      for (i=0; i<nSteps; i++, n++) {
         snprintf(buf, bufSize, " " icXmlFloatFmt, m_pMatrix[n]);
         xml += buf;
       }
@@ -1587,7 +1629,7 @@ bool CIccMpeXmlInvEmissionMatrix::ToXml(std::string &xml, std::string blanks/* =
     xml += blanks + "  <OffsetData>\n";
 
     xml += blanks + "   ";
-    for (i=0; i<(int)m_Range.steps; i++) {
+    for (i=0; i<nSteps; i++) {
       snprintf(buf, bufSize, " " icXmlFloatFmt, m_pOffset[i]);
       xml += buf;
     }
@@ -1604,11 +1646,14 @@ bool CIccMpeXmlInvEmissionMatrix::ToXml(std::string &xml, std::string blanks/* =
 
 bool CIccMpeXmlInvEmissionMatrix::ParseXml(xmlNode *pNode, std::string &parseStr)
 {
-  icUInt16Number nInputChannels = atoi(icXmlAttrValue(pNode, "InputChannels"));
-  icUInt16Number nOutputChannels = atoi(icXmlAttrValue(pNode, "OutputChannels"));
-
-  if (!nInputChannels || !nOutputChannels) {
-    parseStr += "Invalid InputChannels or OutputChannels In MatrixElement\n";
+  icUInt16Number nInputChannels = 0;
+  icUInt16Number nOutputChannels = 0;
+  if (!icXmlParseMatrixChannels(pNode, nInputChannels, nOutputChannels,
+                                "InvEmissionMatrixElement", parseStr)) {
+    return false;
+  }
+  if (nInputChannels != 3 || nOutputChannels != 3) {
+    parseStr += "Invalid InputChannels or OutputChannels In InvEmissionMatrixElement\n";
     return false;
   }
 
@@ -1616,17 +1661,8 @@ bool CIccMpeXmlInvEmissionMatrix::ParseXml(xmlNode *pNode, std::string &parseStr
 
   pData = icXmlFindNode(pNode->children, "Wavelengths");
   if (pData) {
-    icFloatNumber dStart = (icFloatNumber)atof(icXmlAttrValue(pData, "start"));
-    icFloatNumber dEnd = (icFloatNumber)atof(icXmlAttrValue(pData, "end"));
-    icUInt16Number nSteps = atoi(icXmlAttrValue(pData, "steps"));
-
-    if (!nSteps) {
-      parseStr += "Invalid Spectral Range\n";
+    if (!icXmlParseSpectralRange(pData, m_Range, parseStr))
       return false;
-    }
-    m_Range.start = icFtoF16(dStart);
-    m_Range.end = icFtoF16(dEnd);
-    m_Range.steps = nSteps;
   }
 
   SetSize(nInputChannels, nOutputChannels, m_Range);
@@ -2520,7 +2556,7 @@ bool CIccMpeXmlCalculator::ParseImport(xmlNode *pNode, std::string importPath, s
 
             /* Parse the file and get the DOM. See IccProfileXml.cpp for
              * the rationale for dropping XML_PARSE_HUGE and adding
-             * XML_PARSE_NOENT — matches the main LoadXml entry point.
+             * XML_PARSE_NOENT - matches the main LoadXml entry point.
              */
             doc = xmlReadFile(file.c_str(), NULL, XML_PARSE_NONET | XML_PARSE_NOENT);
 
@@ -3271,7 +3307,7 @@ bool CIccMpeXmlCalculator::ParseChanMap(ChanVarMap& chanMap, const char *szNames
 
 bool CIccMpeXmlCalculator::ParseXml(xmlNode *pNode, std::string &parseStr)
 {
-  // Guard against nested <CalculatorElement><SubElements>…</> recursion.
+  // Guard against nested <CalculatorElement><SubElements>...</> recursion.
   // Each level is one C++ stack frame; on Emscripten's ~1 MB stack a
   // crafted XML with a few thousand nested CalculatorElements blows
   // through it. 32 levels is generous for any legitimate iccMAX
