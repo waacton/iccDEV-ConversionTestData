@@ -15,6 +15,10 @@ maintainer explicitly asks otherwise.
 
 ## Local Commands
 
+Windows examples include both `cmd.exe` and PowerShell forms where shell syntax
+differs. If CMake reports `No such preset`, fetch and switch to a branch that
+contains the matching `Build/Cmake/CMakePresets.json` update.
+
 Linux and macOS single-config generators:
 
 ```bash
@@ -42,22 +46,43 @@ ctest --test-dir out/vs2022-x64 -C Release --output-on-failure --no-tests=error
 cmake --build out/vs2022-x64 --config Release --target check
 ```
 
-Windows MinGW single-config generators:
+Windows MinGW single-config generators, `cmd.exe`:
 
 ```cmd
 set PATH=C:\msys64\ucrt64\bin;C:\msys64\usr\bin;%PATH%
-cmake -S Build/Cmake -B out/mingw-x64 -G Ninja ^
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo ^
-  -DCMAKE_C_COMPILER=C:\msys64\ucrt64\bin\x86_64-w64-mingw32-gcc.exe ^
-  -DCMAKE_CXX_COMPILER=C:\msys64\ucrt64\bin\x86_64-w64-mingw32-g++.exe ^
-  -DENABLE_TESTS=ON ^
-  -DENABLE_TOOLS=ON ^
-  -DENABLE_ICCXML=OFF ^
-  -DENABLE_ICCJSON=OFF ^
-  -DENABLE_IMAGE_TOOLS=OFF ^
-  -DENABLE_WXWIDGETS=OFF
-cmake --build out/mingw-x64 --target iccDumpProfile IccProfLib2 --parallel
+cmake --preset mingw-x64 -S Build/Cmake -B out/mingw-x64 ^
+  -DENABLE_TESTS=ON
+cmake --build out/mingw-x64 --parallel
 ctest --test-dir out/mingw-x64 -R "^iccdev\.(windows-icc-dump-profile-smoke|issue-987-shared-mpe-export)$" --output-on-failure --no-tests=error
+```
+
+Windows MinGW single-config generators, PowerShell:
+
+```powershell
+$env:PATH = 'C:\msys64\ucrt64\bin;C:\msys64\usr\bin;' + $env:PATH
+cmake --preset mingw-x64 -S Build/Cmake -B out/mingw-x64 `
+  -DENABLE_TESTS=ON
+cmake --build out/mingw-x64 --parallel
+ctest --test-dir out/mingw-x64 -R "^iccdev\.(windows-icc-dump-profile-smoke|issue-987-shared-mpe-export)$" --output-on-failure --no-tests=error
+```
+
+When the local MSYS2 install only has the core compiler and nlohmann-json
+packages, use the dependency-light static preset. `cmd.exe`:
+
+```cmd
+set PATH=C:\msys64\ucrt64\bin;C:\msys64\usr\bin;%PATH%
+cmake --preset mingw-core-x64 -S Build/Cmake -B out/mingw-core-x64
+cmake --build out/mingw-core-x64 --parallel
+ctest --test-dir out/mingw-core-x64 -R "iccconnect|icc-dump-profile-smoke" --output-on-failure --no-tests=error
+```
+
+PowerShell:
+
+```powershell
+$env:PATH = 'C:\msys64\ucrt64\bin;C:\msys64\usr\bin;' + $env:PATH
+cmake --preset mingw-core-x64 -S Build/Cmake -B out/mingw-core-x64
+cmake --build out/mingw-core-x64 --parallel
+ctest --test-dir out/mingw-core-x64 -R "iccconnect|icc-dump-profile-smoke" --output-on-failure --no-tests=error
 ```
 
 Use `--no-tests=error` for discovery and execution so a registration regression
@@ -65,11 +90,12 @@ cannot pass as a green no-op.
 
 ## Registered Suites
 
-Linux currently registers 17 tests:
+Linux currently registers 18 tests:
 
 | Test | Source |
 |------|--------|
 | `iccdev.create-profiles` | `Testing/CreateAllProfiles.sh` |
+| `iccdev.iccconnect-threaded-cmm` | `.github/ci/regression/iccconnect-threaded-cmm.cpp` |
 | `iccdev.legacy-run-tests` | `Testing/RunTests.sh` |
 | `iccdev.tool-coverage` | `.github/scripts/iccdev-tool-coverage-baseline.sh --asan` |
 | `iccdev.json-cfg` | `.github/scripts/iccdev-json-cfg-tests.sh` |
@@ -92,10 +118,11 @@ The JSON round-trip uses a temporary directory for generated `.json` and
 round-trip `.icc` files so a passing Unix run does not remove or modify tracked
 files in `Testing/`.
 
-Windows currently registers 4 tests:
+Windows full tool builds currently register 5 tests:
 
 | Test | Source |
 |------|--------|
+| `iccdev.iccconnect-threaded-cmm` | `.github/ci/regression/iccconnect-threaded-cmm.cpp` |
 | `iccdev.windows-create-profiles` | `Testing/CreateAllProfiles.bat` |
 | `iccdev.windows-legacy-run-tests` | `Testing/RunTests.bat` |
 | `iccdev.windows-icc-dump-profile-smoke` | `Build/Cmake/Testing/RunWindowsDumpProfileSmokeTest.cmake` |
@@ -106,6 +133,19 @@ The batch-backed Windows tests run through
 into `build/Testing/ctest-output/windows-testing`, runs the batch scripts from
 that disposable directory, verifies key output, and fails if the source
 `Testing/` tree is changed.
+
+Windows CTest wrappers collect build-tree DLL directories plus runtime
+dependency directories from `CMakeCache.txt`, including `CMAKE_PREFIX_PATH`,
+vcpkg installed triplets, compiler `bin` directories, and common dependency
+library prefixes. This keeps CTest execution independent of a developer's
+interactive `PATH` for tools such as `libxml2.dll` or `libwinpthread-1.dll`.
+MinGW builds still need the UCRT64 `bin` directory on the invoking shell `PATH`
+because GCC launches runtime-dependent compiler subprocesses during the build.
+
+Feature-disabled Windows builds register the tests whose targets are available.
+For example, `mingw-core-x64` does not build XML conversion tools, so it skips
+the batch-backed generated-profile suites and can still run the dump-profile
+smoke test plus the IccConnect threaded CMM regression.
 
 `iccdev.windows-icc-dump-profile-smoke` runs `iccDumpProfile --read --diag`
 against the checked-in `Testing/CalcTest/calcUnderStack_add.icc` profile and

@@ -44,12 +44,17 @@ when practical.
 
 - `check` must exist on every platform.
 - `check` and workflow CTest execution must use `--no-tests=error`.
-- Linux suite count assertions currently expect `Total Tests: 17`.
-- Windows currently registers 4 CTest suites and validates 129 profile parses.
-- JSON round-trip profile generation validates 129 profile parses.
+- Linux suite count assertions currently expect `Total Tests: 18`.
+- Windows currently registers 5 CTest suites.
+- Generated-profile gates currently validate 207 ICC profiles.
 - WASM parity currently expects 207 generated ICC profiles.
 - Windows batch CTest runs must use the disposable Testing copy under the build
   tree and must not dirty the source `Testing/` directory.
+- Windows executable tests must receive runtime DLL directories through
+  `Build/Cmake/Testing/WindowsRuntimePaths.cmake`; do not rely on a developer or
+  runner shell `PATH` for vcpkg or MinGW runtime DLLs.
+- MinGW builds still need UCRT64 `bin` on the invoking shell `PATH` because GCC
+  subprocesses such as `cc1plus.exe` depend on MSYS2 runtime DLLs during build.
 
 ## Workflow Rules
 
