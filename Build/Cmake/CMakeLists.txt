@@ -127,11 +127,11 @@ project(RefIccMAX LANGUAGES C CXX)
 set(PROJECT_UP_NAME "REFICCMAX")
 set(PROJECT_DOWN_NAME "reficcmax")
 
-# Version components (4-part version: 2.3.1.8)
+# Version components (4-part version: 2.3.2.0)
 set(${PROJECT_UP_NAME}_MAJOR_VERSION 2)
 set(${PROJECT_UP_NAME}_MINOR_VERSION 3)
-set(${PROJECT_UP_NAME}_MICRO_VERSION 1)
-set(${PROJECT_UP_NAME}_PATCH_VERSION 8)
+set(${PROJECT_UP_NAME}_MICRO_VERSION 2)
+set(${PROJECT_UP_NAME}_PATCH_VERSION 0)
 
 # Composite versions
 set(${PROJECT_UP_NAME}_VERSION
@@ -466,7 +466,10 @@ if(ENABLE_ICCXML)
   endif()
 endif()
 
-# --- nlohmann_json (found later, guarded by ENABLE_ICCJSON) ---
+# --- nlohmann_json ---
+if(ENABLE_ICCJSON OR ENABLE_TOOLS)
+  find_package(nlohmann_json REQUIRED)
+endif()
 
 # --- TIFF ---
 if(ENABLE_TOOLS AND ENABLE_IMAGE_TOOLS)
@@ -879,6 +882,11 @@ elseif(ipo_supported)
     # LNK2001 unresolved externals when consumers link the import library.
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION OFF)
     message(STATUS ">>> Link-Time Optimization (LTO) disabled: WINDOWS_EXPORT_ALL_SYMBOLS requires COFF objects")
+  elseif(MINGW AND ENABLE_STATIC_LIBS AND NOT ENABLE_SHARED_LIBS)
+    # MinGW static tool links can fail when executable objects use -flto while
+    # iccDEV static archives intentionally disable IPO for native COFF output.
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION OFF)
+    message(STATUS ">>> Link-Time Optimization (LTO) disabled: MinGW static builds require native COFF objects")
   elseif(_is_multi_config)
     # Multi-config generator (Visual Studio, Xcode, Ninja Multi-Config):
     # enable LTO for Release only
@@ -1184,17 +1192,23 @@ elseif(EMSCRIPTEN)
 elseif(WIN32)
   message(STATUS "Detected platform: Windows")
 
-  # Windows + MSVC flags
-  add_compile_options(/std:c++17 /D_WINDOWS /EHsc /GS)
+  if(MSVC)
+    # Windows + MSVC flags
+    add_compile_options(/std:c++17 /D_WINDOWS /EHsc /GS)
 
-  # ASLR + DEP + CET shadow stacks
-  add_link_options(/DYNAMICBASE /NXCOMPAT)
-  # CET (Control-flow Enforcement Technology) requires VS 2019 16.7+
-  if(MSVC_VERSION GREATER_EQUAL 1927)
-    add_link_options(/CETCOMPAT)
+    # ASLR + DEP + CET shadow stacks
+    add_link_options(/DYNAMICBASE /NXCOMPAT)
+    # CET (Control-flow Enforcement Technology) requires VS 2019 16.7+
+    if(MSVC_VERSION GREATER_EQUAL 1927)
+      add_link_options(/CETCOMPAT)
+    endif()
+
+    message(STATUS "Windows build: Compiler flags set for MSVC with C++17, buffer security, and ASLR/DEP.")
+  elseif(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    message(STATUS "Windows build: Using CMake C++17 defaults for MinGW/Clang.")
+  else()
+    message(STATUS "Windows build: Using compiler defaults for ${CMAKE_CXX_COMPILER_ID}.")
   endif()
-
-  message(STATUS "Windows build: Compiler flags set for MSVC with C++17, buffer security, and ASLR/DEP.")
 
 else()
   message(FATAL_ERROR "Unsupported or unknown platform. Aborting build configuration.")
@@ -1319,7 +1333,6 @@ include_directories(${CMAKE_CURRENT_BINARY_DIR}/IccXML)
 # JSON library (parallel to IccXML, uses nlohmann/json)
 #
 IF(ENABLE_ICCJSON)
-  find_package(nlohmann_json REQUIRED)
   if(VERBOSE_CONFIG)
     message(STATUS "nlohmann_json          : ${nlohmann_json_DIR} (version: ${nlohmann_json_VERSION})")
   endif()
@@ -1347,6 +1360,25 @@ IF(ENABLE_ICCJSON)
   include_directories(${TOP_SOURCE_DIR}/IccJSON/IccLibJSON/)
   include_directories(${CMAKE_CURRENT_BINARY_DIR}/IccJSON)
 ENDIF(ENABLE_ICCJSON)
+
+#
+# IccConnect library (JSON-configurable CMM transform construction)
+#
+IF(ENABLE_ICCJSON OR ENABLE_TOOLS)
+  message(STATUS "Adding subdirectory for IccConnect.")
+  add_subdirectory(IccConnect)
+
+  # Set default link target for IccConnect (matches build configuration)
+  IF(ENABLE_SHARED_LIBS)
+    set(TARGET_LIB_ICCCONNECT IccConnect2 CACHE INTERNAL "Link target for IccConnect2")
+  ELSE()
+    set(TARGET_LIB_ICCCONNECT IccConnect2-static CACHE INTERNAL "Link target for IccConnect2")
+  ENDIF()
+
+  # Ensure IccConnect headers are available globally
+  include_directories(${TOP_SOURCE_DIR}/IccConnect/IccLibConnect/)
+  include_directories(${CMAKE_CURRENT_BINARY_DIR}/IccConnect)
+ENDIF()
 
 # Diagnostic: Output current linker flags
 if(VERBOSE_CONFIG)
@@ -1401,6 +1433,7 @@ IF(ENABLE_TOOLS)
   ADD_SUBDIRECTORY(Tools/IccV5DspObsToV4Dsp)
   ADD_SUBDIRECTORY(Tools/IccApplyToLink)
   ADD_SUBDIRECTORY(Tools/IccApplySearch)
+  ADD_SUBDIRECTORY(Tools/IccProfileVisualize)
 
   # Ensure IccXML-dependent tools are built after IccXML library (safety net)
   IF(ENABLE_ICCXML)
@@ -1510,6 +1543,7 @@ IF(ENABLE_TOOLS)
       iccSpecSepToTiff
       iccTiffDump
       iccDumpProfileGui
+      iccProfileVisualize
   )
     iccdev_fixup_msvc_compile_pdb(${_iccdev_tool_target})
   endforeach()
@@ -1573,6 +1607,7 @@ ADD_CUSTOM_TARGET( dist-bin2
     COMMAND cp -av ${CMAKE_SOURCE_DIR}/../../Testing/iccTiffDump ${PROJECT_NAME}-${CMAKE_SYSTEM_NAME}${ARCH}-${${PROJECT_UP_NAME}_VERSION}/Testing/
     COMMAND cp -av ${CMAKE_SOURCE_DIR}/../../Testing/iccPngDump ${PROJECT_NAME}-${CMAKE_SYSTEM_NAME}${ARCH}-${${PROJECT_UP_NAME}_VERSION}/Testing/
     COMMAND cp -av ${CMAKE_SOURCE_DIR}/../../Testing/iccV5DspObsToV4Dsp ${PROJECT_NAME}-${CMAKE_SYSTEM_NAME}${ARCH}-${${PROJECT_UP_NAME}_VERSION}/Testing/
+    COMMAND cp -av ${CMAKE_SOURCE_DIR}/../../Testing/iccProfileVisualize ${PROJECT_NAME}-${CMAKE_SYSTEM_NAME}${ARCH}-${${PROJECT_UP_NAME}_VERSION}/Testing/
     COMMAND cp -av ${CMAKE_SOURCE_DIR}/../../Testing/CreateAllProfiles.sh ${PROJECT_NAME}-${CMAKE_SYSTEM_NAME}${ARCH}-${${PROJECT_UP_NAME}_VERSION}/Testing/
     COMMAND cp -av ${CMAKE_SOURCE_DIR}/../../Testing/RunTests.sh ${PROJECT_NAME}-${CMAKE_SYSTEM_NAME}${ARCH}-${${PROJECT_UP_NAME}_VERSION}/Testing/
     COMMAND echo tar cf - ${PROJECT_NAME}-${CMAKE_SYSTEM_NAME}${ARCH}-${${PROJECT_UP_NAME}_VERSION}/ --owner user:1000 --group group:500 | gzip -9 > ../${PROJECT_NAME}-${CMAKE_SYSTEM_NAME}${ARCH}-${${PROJECT_UP_NAME}_VERSION}.tar.gz

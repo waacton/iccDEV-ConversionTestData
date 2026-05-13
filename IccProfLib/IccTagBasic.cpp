@@ -3158,6 +3158,15 @@ bool CIccTagNamedColor2::Read(icUInt32Number size, CIccIO *pIO)
   m_szPrefix[sizeof(m_szPrefix)-1] = 0;
   m_szSufix[sizeof(m_szSufix)-1] = 0;
 
+  // Hard upper bounds on profile-controlled counts to defend
+  // Describe()/Find()/Apply() loops against malformed tags
+  // (CWE-400/CWE-834). Real profiles have a few thousand named
+  // colors at most and well under 16 device channels.
+  const icUInt32Number kMaxNamedColorEntries = 65536;
+  const icUInt32Number kMaxNamedColorDeviceCoords = 256;
+  if (nNum > kMaxNamedColorEntries || nCoords > kMaxNamedColorDeviceCoords)
+    return false;
+
   size -= nTagHdrSize;
 
   size_t nCount = size / (32+(3+(size_t)nCoords)*sizeof(icUInt16Number));
@@ -3344,7 +3353,7 @@ void CIccTagNamedColor2::SetColorSpaces(icColorSpaceSignature csPCS, icColorSpac
 icInt32Number CIccTagNamedColor2::FindRootColor(const icChar *szRootColor) const
 {
   for (icUInt32Number i=0; i<m_nSize; i++) {
-    if (stricmp(m_NamedColor[i].rootName,szRootColor) == 0)
+    if (stricmp(GetEntry(i)->rootName,szRootColor) == 0)
       return i;
   }
 
@@ -3390,7 +3399,7 @@ bool CIccTagNamedColor2::InitFindCachedPCSColor()
     if (m_csPCS != icSigLabData) {
       for (icUInt32Number i=0; i<m_nSize; i++) {
         pLab = m_NamedLab[i].lab;
-        pXYZ = m_NamedColor[i].pcsCoords;
+        pXYZ = GetEntry(i)->pcsCoords;
         icXyzFromPcs(pXYZ);
         icXYZtoLab(pLab, pXYZ);
       }
@@ -3398,7 +3407,7 @@ bool CIccTagNamedColor2::InitFindCachedPCSColor()
     else {
       for (icUInt32Number i=0; i<m_nSize; i++) {
         pLab = m_NamedLab[i].lab;
-        Lab2ToLab4(pLab, m_NamedColor[i].pcsCoords);
+        Lab2ToLab4(pLab, GetEntry(i)->pcsCoords);
         icLabFromPcs(pLab);
       }
     }
@@ -3517,7 +3526,7 @@ icInt32Number CIccTagNamedColor2::FindColor(const icChar *szColor) const
 
   for ( i=0; i<(icInt32Number)m_nSize; i++) {
     sColorName = m_szPrefix;
-    sColorName += m_NamedColor[i].rootName;
+    sColorName += GetEntry(i)->rootName;
     sColorName += m_szSufix;
 
     if (strcmp(sColorName.c_str(),szColor) == 0)
@@ -3551,7 +3560,7 @@ icInt32Number CIccTagNamedColor2::FindDeviceColor(icFloatNumber *pDevColor) cons
 
 
   for (icUInt32Number i=0; i<m_nSize; i++) {
-    pDevOut = m_NamedColor[i].deviceCoords;
+    pDevOut = GetEntry(i)->deviceCoords;
 
     for (icUInt32Number j=0; j<m_nDeviceCoords; j++) {
       dCalcDiff += (pDevColor[j]-pDevOut[j])*(pDevColor[j]-pDevOut[j]);
@@ -4793,6 +4802,12 @@ bool CIccTagSparseMatrixArray::Read(icUInt32Number size, CIccIO *pIO)
   
   // reject tags with invalid counts of items
   if (nNumMatrices < 1 || nChannels < 1)
+    return false;
+
+  // Hard upper bound on profile-controlled matrix count to defend
+  // Validate()/Apply() loops against malformed tags (CWE-400/CWE-834).
+  const icUInt32Number kMaxSparseMatrixArrayCount = 65536;
+  if (nNumMatrices > kMaxSparseMatrixArrayCount)
     return false;
 
   m_nMatrixType = (icSparseMatrixType)nMatrixType;
@@ -7411,6 +7426,11 @@ static bool icIsValidUtf16(const icUInt16Number *pBuf, icUInt32Number nLength)
   return true;
 }
 
+static void icAppendUtf8Byte(std::string &sText, icUInt32Number nByte)
+{
+  sText.push_back(static_cast<char>(nByte & 0xffu));
+}
+
 /**
  ****************************************************************************
  * Name: CIccLocalizedUnicode::GetUtf8Size
@@ -7475,6 +7495,9 @@ bool CIccLocalizedUnicode::GetText(std::string &sText)
 {
   sText.clear();
 
+  if (!m_pBuf)
+    return m_nLength == 0;
+
   icUInt16Number* str = m_pBuf;
   icUInt16Number *str_end = m_pBuf + m_nLength;
   while ( (str < str_end) && *str ) {
@@ -7504,22 +7527,22 @@ bool CIccLocalizedUnicode::GetText(std::string &sText)
     //UTF-32 to UTF-8 -------
 
     if (code32 <= 0x007F) {
-      sText += (unsigned char)code32;
+      icAppendUtf8Byte(sText, code32);
     }
     else if (code32 <= 0x07FF) {
-      sText += (unsigned char)(((code32 >> 6) & 0x1F) | 0xC0);
-      sText += (unsigned char)((code32 & 0x3F) | 0x80);
+      icAppendUtf8Byte(sText, ((code32 >> 6) & 0x1F) | 0xC0);
+      icAppendUtf8Byte(sText, (code32 & 0x3F) | 0x80);
     }
     else if (code32 <= 0xFFFF) {
-      sText += (unsigned char)(((code32 >> 12) & 0x0F) | 0xE0);
-      sText += (unsigned char)(((code32 >> 6) & 0x3F) | 0x80);
-      sText += (unsigned char)(((code32) & 0x3F) | 0x80);
+      icAppendUtf8Byte(sText, ((code32 >> 12) & 0x0F) | 0xE0);
+      icAppendUtf8Byte(sText, ((code32 >> 6) & 0x3F) | 0x80);
+      icAppendUtf8Byte(sText, (code32 & 0x3F) | 0x80);
     }
     else if (code32 <= 0x10FFFF) {
-      sText += (unsigned char)(((code32 >> 18) & 0x07) | 0xF0);
-      sText += (unsigned char)(((code32 >> 12) & 0x3F) | 0x80);
-      sText += (unsigned char)(((code32 >> 6) & 0x3F) | 0x80);
-      sText += (unsigned char)(((code32) & 0x3F) | 0x80);
+      icAppendUtf8Byte(sText, ((code32 >> 18) & 0x07) | 0xF0);
+      icAppendUtf8Byte(sText, ((code32 >> 12) & 0x3F) | 0x80);
+      icAppendUtf8Byte(sText, ((code32 >> 6) & 0x3F) | 0x80);
+      icAppendUtf8Byte(sText, (code32 & 0x3F) | 0x80);
     }
   }
 
@@ -9663,6 +9686,7 @@ CIccProfileDescText::CIccProfileDescText(const CIccProfileDescText &IPDC)
 {
   if (IPDC.m_pTag) {
     m_pTag = IPDC.m_pTag->NewCopy();
+    m_pTag->SetParentObject(this);
     m_bNeedsPading = IPDC.m_bNeedsPading;
   }
   else {
@@ -9687,11 +9711,14 @@ CIccProfileDescText &CIccProfileDescText::operator=(const CIccProfileDescText &P
   if (&ProfDescText == this)
     return *this;
 
-  if (m_pTag)
+  if (m_pTag) {
+    m_pTag->SetParentObject(nullptr);
     delete m_pTag;
+  }
 
   if (ProfDescText.m_pTag) {
     m_pTag = ProfDescText.m_pTag->NewCopy();
+    m_pTag->SetParentObject(this);
     m_bNeedsPading = ProfDescText.m_bNeedsPading;
   }
   else {
@@ -9713,8 +9740,10 @@ CIccProfileDescText &CIccProfileDescText::operator=(const CIccProfileDescText &P
  */
 CIccProfileDescText::~CIccProfileDescText()
 {
-  if (m_pTag)
+  if (m_pTag) {
+    m_pTag->SetParentObject(nullptr);
     delete m_pTag;
+  }
 }
 
 
@@ -9738,6 +9767,7 @@ bool CIccProfileDescText::SetType(icTagTypeSignature nType)
     if (m_pTag->GetType() == nType)
       return true;
 
+    m_pTag->SetParentObject(nullptr);
     delete m_pTag;
   }
 
@@ -9746,6 +9776,9 @@ bool CIccProfileDescText::SetType(icTagTypeSignature nType)
     m_pTag = CIccTagCreator::CreateTag(nType);
   else
     m_pTag = NULL;
+
+  if (m_pTag)
+    m_pTag->SetParentObject(this);
 
   return(m_pTag != NULL);
 }

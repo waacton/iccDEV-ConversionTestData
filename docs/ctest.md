@@ -15,6 +15,10 @@ maintainer explicitly asks otherwise.
 
 ## Local Commands
 
+Windows examples include both `cmd.exe` and PowerShell forms where shell syntax
+differs. If CMake reports `No such preset`, fetch and switch to a branch that
+contains the matching `Build/Cmake/CMakePresets.json` update.
+
 Linux and macOS single-config generators:
 
 ```bash
@@ -42,18 +46,61 @@ ctest --test-dir out/vs2022-x64 -C Release --output-on-failure --no-tests=error
 cmake --build out/vs2022-x64 --config Release --target check
 ```
 
+Windows MinGW single-config generators, `cmd.exe`:
+
+```cmd
+set PATH=C:\msys64\ucrt64\bin;C:\msys64\usr\bin;%PATH%
+cmake --preset mingw-x64 -S Build/Cmake -B out/mingw-x64 ^
+  -DENABLE_TESTS=ON
+cmake --build out/mingw-x64 --parallel
+ctest --test-dir out/mingw-x64 -R "^iccdev\.(windows-icc-dump-profile-smoke|issue-987-shared-mpe-export)$" --output-on-failure --no-tests=error
+```
+
+Windows MinGW single-config generators, PowerShell:
+
+```powershell
+$env:PATH = 'C:\msys64\ucrt64\bin;C:\msys64\usr\bin;' + $env:PATH
+cmake --preset mingw-x64 -S Build/Cmake -B out/mingw-x64 `
+  -DENABLE_TESTS=ON
+cmake --build out/mingw-x64 --parallel
+ctest --test-dir out/mingw-x64 -R "^iccdev\.(windows-icc-dump-profile-smoke|issue-987-shared-mpe-export)$" --output-on-failure --no-tests=error
+```
+
+When the local MSYS2 install only has the core compiler and nlohmann-json
+packages, use the dependency-light static preset. `cmd.exe`:
+
+```cmd
+set PATH=C:\msys64\ucrt64\bin;C:\msys64\usr\bin;%PATH%
+cmake --preset mingw-core-x64 -S Build/Cmake -B out/mingw-core-x64
+cmake --build out/mingw-core-x64 --parallel
+ctest --test-dir out/mingw-core-x64 -R "iccconnect|icc-dump-profile-smoke" --output-on-failure --no-tests=error
+```
+
+PowerShell:
+
+```powershell
+$env:PATH = 'C:\msys64\ucrt64\bin;C:\msys64\usr\bin;' + $env:PATH
+cmake --preset mingw-core-x64 -S Build/Cmake -B out/mingw-core-x64
+cmake --build out/mingw-core-x64 --parallel
+ctest --test-dir out/mingw-core-x64 -R "iccconnect|icc-dump-profile-smoke" --output-on-failure --no-tests=error
+```
+
 Use `--no-tests=error` for discovery and execution so a registration regression
 cannot pass as a green no-op.
 
 ## Registered Suites
 
-Linux currently registers 17 tests:
+Linux currently registers 22 tests:
 
 | Test | Source |
 |------|--------|
 | `iccdev.create-profiles` | `Testing/CreateAllProfiles.sh` |
+| `iccdev.iccconnect-threaded-cmm` | `.github/ci/regression/iccconnect-threaded-cmm.cpp` |
 | `iccdev.legacy-run-tests` | `Testing/RunTests.sh` |
-| `iccdev.tool-coverage` | `.github/scripts/iccdev-tool-coverage-baseline.sh --asan` |
+| `iccdev.tool-coverage` | `.github/scripts/iccdev-tool-coverage-baseline.sh --asan --skip-hybrid` |
+| `iccdev.hybrid-pipeline` | `.github/scripts/iccdev-hybrid-pipeline-tests.sh` |
+| `iccdev.specsep-tiff-geometry-regression` | `.github/scripts/iccdev-specsep-tiff-geometry-regression-tests.sh` |
+| `iccdev.dump-profile-header-regression` | `.github/scripts/iccdev-dump-profile-header-regression-tests.sh` |
 | `iccdev.json-cfg` | `.github/scripts/iccdev-json-cfg-tests.sh` |
 | `iccdev.json-cli-exercise` | `.github/scripts/json-cli-exercise.sh` |
 | `iccdev.json-parser-regressions` | `.github/scripts/iccdev-json-parser-regression-tests.sh` |
@@ -67,25 +114,72 @@ Linux currently registers 17 tests:
 | `iccdev.namedcolor-apply-regressions` | `.github/scripts/iccdev-namedcolor-apply-regression-tests.sh` |
 | `iccdev.v5-namedcmm-regressions` | `.github/scripts/iccdev-v5-namedcmm-regression-tests.sh` |
 | `iccdev.version-bcd-regressions` | `.github/scripts/iccdev-version-bcd-regression-tests.sh` |
-| `iccdev.describe-sink-api` | `Tools/CmdLine/IccDescribeSinkTest/iccDescribeSinkTest.cpp` |
+| `iccdev.profile-visualize-regressions` | `.github/scripts/iccdev-profile-visualize-tests.sh` |
+| `iccdev.describe-sink-api` | `.github/ci/regression/iccDescribeSinkTest.cpp` |
 
 `iccdev.legacy-run-tests` requires `iccToJson` and `iccFromJson` under CTest.
 The JSON round-trip uses a temporary directory for generated `.json` and
 round-trip `.icc` files so a passing Unix run does not remove or modify tracked
 files in `Testing/`.
 
-Windows currently registers 2 tests:
+`iccdev.tool-coverage` may add focused command-line regressions inside the
+existing script without changing the CTest suite count. When a bug is tied to an
+AFL-minimized crash or hang, embed the smallest stable reproducer in the script
+or generate it under `ICCDEV_TEST_OUTDIR`; do not require local AFL output
+directories or commit generated crash artifacts. Validate both the direct script
+path and the CTest wrapper when changing this suite.
+
+`iccdev.hybrid-pipeline` preserves the full six-phase hybrid spectral/colorimetric
+integration test as a separate `slow` CTest label. Routine CI tool sweeps run
+with `--label-exclude slow`; run the hybrid gate explicitly with
+`ctest --test-dir build -R '^iccdev\.hybrid-pipeline$' --output-on-failure`.
+
+Use a standalone CTest row for focused crash regressions that need clear
+maintainer visibility in CTest output. For example,
+`iccdev.specsep-tiff-geometry-regression` generates a malformed TIFF under
+`ICCDEV_TEST_OUTDIR`, invokes `iccSpecSepToTiff` using its prefix-plus-channel
+input semantics, and verifies graceful rejection without sanitizer findings.
+`iccdev.dump-profile-header-regression` mutates the ICC header size field to
+`0xffffffff` and verifies `iccDumpProfile -v 100` handles validation reporting
+without signed-conversion sanitizer findings.
+
+Windows full tool builds currently register 5 tests:
 
 | Test | Source |
 |------|--------|
+| `iccdev.iccconnect-threaded-cmm` | `.github/ci/regression/iccconnect-threaded-cmm.cpp` |
 | `iccdev.windows-create-profiles` | `Testing/CreateAllProfiles.bat` |
 | `iccdev.windows-legacy-run-tests` | `Testing/RunTests.bat` |
+| `iccdev.windows-icc-dump-profile-smoke` | `Build/Cmake/Testing/RunWindowsDumpProfileSmokeTest.cmake` |
+| `iccdev.issue-987-shared-mpe-export` | `Build/Cmake/Testing/RunWindowsSharedExportTest.cmake` |
 
-The Windows tests run through
-`Build/Cmake/Testing/RunWindowsBatchTest.cmake`. The wrapper copies
-`Testing/` into `build/Testing/ctest-output/windows-testing`, runs the batch
-scripts from that disposable directory, verifies key output, and fails if the
-source `Testing/` tree is changed.
+The batch-backed Windows tests run through
+`Build/Cmake/Testing/RunWindowsBatchTest.cmake`. The wrapper copies `Testing/`
+into `build/Testing/ctest-output/windows-testing`, runs the batch scripts from
+that disposable directory, verifies key output, and fails if the source
+`Testing/` tree is changed.
+
+Windows CTest wrappers collect build-tree DLL directories plus runtime
+dependency directories from `CMakeCache.txt`, including `CMAKE_PREFIX_PATH`,
+vcpkg installed triplets, compiler `bin` directories, and common dependency
+library prefixes. This keeps CTest execution independent of a developer's
+interactive `PATH` for tools such as `libxml2.dll` or `libwinpthread-1.dll`.
+MinGW builds still need the UCRT64 `bin` directory on the invoking shell `PATH`
+because GCC launches runtime-dependent compiler subprocesses during the build.
+
+Feature-disabled Windows builds register the tests whose targets are available.
+For example, `mingw-core-x64` does not build XML conversion tools, so it skips
+the batch-backed generated-profile suites and can still run the dump-profile
+smoke test plus the IccConnect threaded CMM regression.
+
+`iccdev.windows-icc-dump-profile-smoke` runs `iccDumpProfile --read --diag`
+against the checked-in `Testing/CalcTest/calcUnderStack_add.icc` profile and
+verifies the eager `ReadIccProfile()` path, expected profile size, tag count,
+and header/file-size diagnostic. `iccdev.issue-987-shared-mpe-export` is a
+focused Windows shared-library regression for MSVC and MinGW. It checks that
+`IccProfLib2.dll` exports `CIccTagMultiProcessElement::NumElements` with
+`dumpbin` or `objdump`, then builds and runs a small consumer against the
+build-tree DLL and import library.
 
 ## Fixtures and Logs
 
@@ -132,6 +226,9 @@ For repeatable agent-assisted work, use
      `Testing/CreateAllProfiles.sh` changes the generated-profile set.
 4. Validate locally with CMake configure, build, `ctest -N --no-tests=error`,
    `ctest --output-on-failure --no-tests=error`, and `git diff --check`.
+   For changes inside `iccdev.tool-coverage`, also run the direct script with
+   explicit `ICCDEV_TOOLS_DIR`, `ICCDEV_TESTING_DIR`, and
+   `ICCDEV_TEST_OUTDIR`, plus `ctest -R '^iccdev\.tool-coverage$'`.
 
 Do not let a workflow keep `|| true` around profile generation, CTest
 discovery, or regression execution. Expected skips should be explicit in the

@@ -1213,13 +1213,21 @@ bool CIccSampledCurveSegment::Begin(CIccCurveSegment *pPrevSeg = NULL)
  ******************************************************************************/
 icFloatNumber CIccSampledCurveSegment::Apply(icFloatNumber v) const
 {
+  if (!std::isfinite(v))
+    v=m_startPoint;
+
   if (v<m_startPoint)
     v=m_startPoint;
   else if (v>m_endPoint)
     v=m_endPoint;
 
   icFloatNumber pos = (v-m_startPoint)/m_range * m_last;
-  icUInt32Number index = (icUInt32Number) pos;
+  if (!std::isfinite(pos) || pos<0.0f)
+    pos=0.0f;
+  else if (pos>m_last)
+    pos=m_last;
+
+  icUInt32Number index = static_cast<icUInt32Number>(pos);
   icFloatNumber remainder = pos - (icFloatNumber)index;
 
   if (remainder==0.0)
@@ -1838,7 +1846,12 @@ icFloatNumber CIccSingleSampledCurve::Apply(icFloatNumber v) const
   }
 
   icFloatNumber pos = (v-m_firstEntry)/m_range * m_last;
-  icUInt32Number index = (icUInt32Number) pos;
+  if (!std::isfinite(pos) || pos<0.0f)
+    pos=0.0f;
+  else if (pos>m_last)
+    pos=m_last;
+
+  icUInt32Number index = static_cast<icUInt32Number>(pos);
   icFloatNumber remainder = pos - (icFloatNumber)index;
 
   if (remainder==0.0)
@@ -1966,8 +1979,10 @@ CIccSampledCalculatorCurve::CIccSampledCalculatorCurve(const CIccSampledCalculat
 
   m_nDesiredSize = curve.m_nDesiredSize;
 
-  if (curve.m_pCalc)
+  if (curve.m_pCalc) {
     m_pCalc = curve.m_pCalc->NewCopy();
+    m_pCalc->SetParentObject(this);
+  }
   else
     m_pCalc = NULL;
 
@@ -2008,8 +2023,10 @@ CIccSampledCalculatorCurve &CIccSampledCalculatorCurve::operator=(const CIccSamp
   if (this == &curve)   // safety
     return (*this);
 
-  if (m_pCalc)
+  if (m_pCalc) {
+    m_pCalc->SetParentObject(nullptr);
     delete m_pCalc;
+  }
 
   if (m_pSamples)
     free(m_pSamples);
@@ -2024,8 +2041,10 @@ CIccSampledCalculatorCurve &CIccSampledCalculatorCurve::operator=(const CIccSamp
   m_storageType = curve.m_storageType;
   m_extensionType = curve.m_extensionType;
 
-  if (curve.m_pCalc)
+  if (curve.m_pCalc) {
     m_pCalc = curve.m_pCalc->NewCopy();
+    m_pCalc->SetParentObject(this);
+  }
   else
     m_pCalc = NULL;
 
@@ -2067,8 +2086,10 @@ CIccSampledCalculatorCurve::~CIccSampledCalculatorCurve()
   if (m_pSamples)
     free(m_pSamples);
 
-  if (m_pCalc)
+  if (m_pCalc) {
+    m_pCalc->SetParentObject(nullptr);
     delete m_pCalc;
+  }
 }
 
 /**
@@ -2136,10 +2157,14 @@ bool CIccSampledCalculatorCurve::SetExtensionType(icUInt16Number nExtensionType)
 ******************************************************************************/
 bool CIccSampledCalculatorCurve::SetCalculator(CIccMpeCalculator *pCalc)
 {
-  if (m_pCalc)
+  if (m_pCalc) {
+    m_pCalc->SetParentObject(nullptr);
     delete m_pCalc;
+  }
 
   m_pCalc = pCalc;
+  if (pCalc)
+    pCalc->SetParentObject(this);
 
   return true;
 }
@@ -2459,6 +2484,9 @@ bool CIccSampledCalculatorCurve::Begin(icElemInterp nInterp, CIccTagMultiProcess
 ******************************************************************************/
 icFloatNumber CIccSampledCalculatorCurve::Apply(icFloatNumber v) const
 {
+  if (!std::isfinite(v))
+    v=m_firstEntry;
+
   if (v < m_firstEntry) {
     return m_loSlope * v + m_loIntercept;;
   }
@@ -2467,7 +2495,12 @@ icFloatNumber CIccSampledCalculatorCurve::Apply(icFloatNumber v) const
   }
 
   icFloatNumber pos = (v - m_firstEntry) / m_range * m_last;
-  icUInt32Number index = (icUInt32Number)pos;
+  if (!std::isfinite(pos) || pos<0.0f)
+    pos=0.0f;
+  else if (pos>m_last)
+    pos=m_last;
+
+  icUInt32Number index = static_cast<icUInt32Number>(pos);
   icFloatNumber remainder = pos - (icFloatNumber)index;
 
   if (remainder == 0.0)
@@ -3586,8 +3619,10 @@ CIccMpeTintArray::CIccMpeTintArray(const CIccMpeTintArray &tintArray)
   m_nInputChannels = tintArray.m_nInputChannels;
   m_nOutputChannels = tintArray.m_nOutputChannels;
 
-  if (tintArray.m_Array)
+  if (tintArray.m_Array) {
     m_Array = (CIccTagNumArray*)tintArray.m_Array->NewCopy();
+    m_Array->SetParentObject(this);
+  }
 
 }
 
@@ -3609,14 +3644,17 @@ CIccMpeTintArray &CIccMpeTintArray::operator=(const CIccMpeTintArray &tintArray)
   m_nReserved = tintArray.m_nReserved;
 
   if (m_Array) {
+    m_Array->SetParentObject(nullptr);
     delete m_Array;
   }
 
   m_nInputChannels = tintArray.m_nInputChannels;
   m_nOutputChannels = tintArray.m_nOutputChannels;
 
-  if (tintArray.m_Array)
+  if (tintArray.m_Array) {
     m_Array = (CIccTagNumArray*)tintArray.m_Array->NewCopy();
+    m_Array->SetParentObject(this);
+  }
 
   return *this;
 }
@@ -3633,8 +3671,10 @@ CIccMpeTintArray &CIccMpeTintArray::operator=(const CIccMpeTintArray &tintArray)
  ******************************************************************************/
 CIccMpeTintArray::~CIccMpeTintArray()
 {
-  if (m_Array)
+  if (m_Array) {
+    m_Array->SetParentObject(nullptr);
     delete m_Array;
+  }
 }
 
 /**
@@ -3664,10 +3704,14 @@ void CIccMpeTintArray::SetVectorSize(int nVectorSize)
  ******************************************************************************/
 void CIccMpeTintArray::SetArray(CIccTagNumArray *pArray)
 {
-  if (m_Array)
+  if (m_Array) {
+    m_Array->SetParentObject(nullptr);
     delete m_Array;
+  }
 
   m_Array = pArray;
+  if (pArray)
+    pArray->SetParentObject(this);
 }
 
 
@@ -3708,8 +3752,10 @@ void CIccMpeTintArray::Describe(std::string &sDescription, int nVerboseness)
  ******************************************************************************/
 bool CIccMpeTintArray::Read(icUInt32Number size, CIccIO *pIO)
 {
-  if (m_Array)
+  if (m_Array) {
+    m_Array->SetParentObject(nullptr);
     delete m_Array;
+  }
   m_Array = NULL;
 
   icElemTypeSignature sig;
@@ -3764,6 +3810,7 @@ bool CIccMpeTintArray::Read(icUInt32Number size, CIccIO *pIO)
   }
 
   m_Array = (CIccTagNumArray*)pTag;
+  m_Array->SetParentObject(this);
   pIO->Seek(arrayPos, icSeekSet);
   if (!m_Array->Read(size-headerSize, pIO)) {
     return false;
@@ -5643,7 +5690,7 @@ bool CIccMpeCLUT::Read(icUInt32Number size, CIccIO *pIO)
     return false;
   }
 
-  icUInt32Number nPoints = (icUInt32Number)m_nInputChannels * m_nOutputChannels;
+  size_t nPoints = (size_t)m_nInputChannels * m_nOutputChannels;
 
   if (m_nInputChannels > 16 || nPoints > dataSize || nPoints * sizeof (icFloat32Number) > dataSize)
     return false;
@@ -5664,7 +5711,6 @@ bool CIccMpeCLUT::Read(icUInt32Number size, CIccIO *pIO)
 
   nPoints = (size_t)m_pCLUT->NumPoints()*m_nOutputChannels;
 
-    // ERROR - comparison of values with different signs!
   if (pIO->ReadFloat32Float(pData,nPoints)!= nPoints)
     return false;
   

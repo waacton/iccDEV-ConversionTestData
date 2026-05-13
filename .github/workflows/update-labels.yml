@@ -1,6 +1,6 @@
 ###############################################################
 #
-# Copyright (©) 2025-2026 International Color Consortium.
+# Copyright (c) 2025-2026 International Color Consortium.
 #                 All rights reserved.
 #                 https://color.org
 #
@@ -15,35 +15,31 @@
 name: ci-status-label
 
 on:
-  workflow_dispatch:
-    inputs:
-      pr_number:
-        description: 'Pull request number to process (blank = all open)'
-        required: false
-        default: ''
-        type: string
   schedule:
     - cron: '0 */4 * * *'
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
 
 permissions:
   contents: read
-  pull-requests: write
-  statuses: read
-  checks: read
+  statuses: read  # Required to evaluate legacy commit statuses.
+  checks: read  # Required to evaluate GitHub Actions check runs.
 
 concurrency:
-  group: pr-status-labeler-${{ github.event.pull_request.number || 'batch' }}
+  group: pr-status-labeler-${{ github.event.pull_request.number || github.event.workflow_run.id || 'batch' }}
   cancel-in-progress: true
 
 jobs:
   label-status:
-    if: >
-      github.event_name != 'workflow_dispatch' ||
-      contains(fromJson('["xsscx","maxderhak","ChrisCoxArt","dwtza"]'), github.actor)
+    name: PR status labeler
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: write  # Required to update PR status labels.
+      statuses: read  # Required to evaluate legacy commit statuses.
+      checks: read  # Required to evaluate GitHub Actions check runs.
 
     steps:
       - name: Check out repository
@@ -65,6 +61,10 @@ jobs:
           gh label create "passed"  --color "0e8a16" --description "All CI checks passed"    2>/dev/null || true
           gh label create "failed"  --color "d93f0b" --description "One or more CI checks failed" 2>/dev/null || true
           gh label create "pending" --color "fbca04" --description "CI checks still running"  2>/dev/null || true
+          gh label create "Merge Ready" \
+            --color "0e8a16" \
+            --description "Approved, mergeable, and all CI checks passed" \
+            2>/dev/null || true
 
       - name: Build PR list
         id: pr_list
@@ -72,34 +72,58 @@ jobs:
         env:
           BASH_ENV: /dev/null
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          INPUT_PR_NUMBER: ${{ github.event.inputs.pr_number }}
           EVENT_PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_WORKFLOW_PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
         run: |
           set -euo pipefail
           git config --add safe.directory "$PWD"
           git config --global credential.helper ""
 
-          INPUT="${INPUT_PR_NUMBER}"
           EVENT_PR="${EVENT_PR_NUMBER}"
+          WORKFLOW_PR="${EVENT_WORKFLOW_PR_NUMBER}"
 
-          if [[ "$INPUT" =~ ^[0-9]+$ ]] && [[ -n "$INPUT" ]]; then
-            echo "prs=$INPUT" >> "$GITHUB_OUTPUT"
-            echo "mode=single" >> "$GITHUB_OUTPUT"
-            echo "Processing single PR: #$INPUT"
-          elif [[ "$EVENT_PR" =~ ^[0-9]+$ ]]; then
-            echo "prs=$EVENT_PR" >> "$GITHUB_OUTPUT"
-            echo "mode=single" >> "$GITHUB_OUTPUT"
+          write_github_output() {
+            local key="$1"
+            local value="$2"
+
+            case "$key" in
+              prs|mode) ;;
+              *)
+                echo "Invalid output key: $key" >&2
+                exit 1
+                ;;
+            esac
+
+            if [[ "$value" == *$'\r'* || "$value" == *$'\n'* ]]; then
+              echo "Invalid multiline value for output: $key" >&2
+              exit 1
+            fi
+
+            printf '%s=%s\n' "$key" "$value" >> "$GITHUB_OUTPUT"  # elements-sanitized
+          }
+
+          if [[ "$EVENT_PR" =~ ^[0-9]+$ ]]; then
+            write_github_output prs "$EVENT_PR"
+            write_github_output mode "single"
             echo "Processing PR from event: #$EVENT_PR"
+          elif [[ "$WORKFLOW_PR" =~ ^[0-9]+$ ]]; then
+            write_github_output prs "$WORKFLOW_PR"
+            write_github_output mode "single"
+            echo "Processing PR from workflow run: #$WORKFLOW_PR"
           else
-            # Schedule / dispatch with no number → scan all open PRs
-            OPEN_PRS=$(gh pr list --state open --json number -q '.[].number' | tr '\n' ' ')
+            # Schedule / dispatch with no number -> scan all open PRs
+            OPEN_PRS=$(gh pr list --state open --json number -q '.[].number' | tr '\n' ' ' | sed 's/[[:space:]]*$//')
+            if [[ ! "$OPEN_PRS" =~ ^[0-9[:space:]]*$ ]]; then
+              echo "Invalid PR list returned by gh" >&2
+              exit 1
+            fi
             if [[ -z "$OPEN_PRS" ]]; then
-              echo "prs=" >> "$GITHUB_OUTPUT"
-              echo "mode=none" >> "$GITHUB_OUTPUT"
-              echo "No open PRs found — nothing to do"
+              write_github_output prs ""
+              write_github_output mode "none"
+              echo "No open PRs found -- nothing to do"
             else
-              echo "prs=$OPEN_PRS" >> "$GITHUB_OUTPUT"
-              echo "mode=batch" >> "$GITHUB_OUTPUT"
+              write_github_output prs "$OPEN_PRS"
+              write_github_output mode "batch"
               echo "Processing open PRs: $OPEN_PRS"
             fi
           fi
@@ -122,6 +146,26 @@ jobs:
           PROCESSED=0
           LABELED=0
 
+          write_github_output() {
+            local key="$1"
+            local value="$2"
+
+            case "$key" in
+              processed|labeled) ;;
+              *)
+                echo "Invalid output key: $key" >&2
+                exit 1
+                ;;
+            esac
+
+            if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+              echo "Invalid numeric value for output: $key" >&2
+              exit 1
+            fi
+
+            printf '%s=%s\n' "$key" "$value" >> "$GITHUB_OUTPUT"  # elements-sanitized
+          }
+
           evaluate_pr() {
             local pr="$1"
 
@@ -141,21 +185,41 @@ jobs:
             fi
 
             # Query commit statuses API
-            local state
-            state=$(gh api "repos/${GH_REPO}/commits/$head/status" \
-              --jq '.state' 2>/dev/null || echo "unknown")
+            local status_data state status_count
+            status_data=$(gh api "repos/${GH_REPO}/commits/$head/status" \
+              --jq '"\(.state)|\(.total_count)"' 2>/dev/null || echo "unknown|0")
+            state="${status_data%%|*}"
+            status_count="${status_data##*|}"
+            if [[ ! "$status_count" =~ ^[0-9]+$ ]]; then
+              status_count=0
+            fi
+
+            local readiness_data is_draft merge_state review_decision
+            readiness_data=$(gh pr view "$pr" \
+              --json isDraft,mergeStateStatus,reviewDecision \
+              --jq '"\(.isDraft)|\(.mergeStateStatus // "UNKNOWN")|\(.reviewDecision // "UNKNOWN")"' 2>/dev/null || echo "true|UNKNOWN|UNKNOWN")
+            is_draft="${readiness_data%%|*}"
+            readiness_data="${readiness_data#*|}"
+            merge_state="${readiness_data%%|*}"
+            review_decision="${readiness_data##*|}"
 
             # Query Check Runs API (Actions uses this, not statuses)
             local check_conclusion
+            # shellcheck disable=SC2016
             check_conclusion=$(gh api "repos/${GH_REPO}/commits/$head/check-runs" \
               --jq '
                 if (.total_count == 0) then "none"
                 else
-                  [.check_runs[] | select(.name != "label-status") | .conclusion // "pending"]
+                  [.check_runs[]
+                    | select(.name as $name
+                        | ["label-status", "apply-labels", "mark-codeql-ready"]
+                        | index($name) | not)
+                    | if .status != "completed" then "pending"
+                      else (.conclusion // "pending") end]
                   | if length == 0 then "none"
-                    elif all(. == "success") then "success"
-                    elif any(. == "failure") then "failure"
+                    elif any(. == "failure" or . == "timed_out" or . == "cancelled" or . == "action_required") then "failure"
                     elif any(. == "pending" or . == "null" or . == null) then "pending"
+                    elif all(. == "success" or . == "skipped" or . == "neutral") then "success"
                     else "unknown" end
                 end' 2>/dev/null || echo "unknown")
 
@@ -163,50 +227,78 @@ jobs:
             local combined
             if [[ "$state" == "failure" || "$check_conclusion" == "failure" ]]; then
               combined="failure"
-            elif [[ "$state" == "success" && "$check_conclusion" == "success" ]]; then
+            elif [[ "$check_conclusion" == "success" ]] &&
+                 [[ "$state" == "success" || "$status_count" -eq 0 ]]; then
+              combined="success"
+            elif [[ "$state" == "success" && "$check_conclusion" == "none" ]]; then
               combined="success"
             elif [[ "$state" == "pending" || "$check_conclusion" == "pending" ]]; then
               combined="pending"
             elif [[ "$check_conclusion" == "none" && "$state" == "pending" ]]; then
               combined="pending"
             elif [[ "$check_conclusion" == "none" && "$state" == "unknown" ]]; then
-              # No checks at all yet — treat as pending
+              # No checks at all yet -- treat as pending
               combined="pending"
             else
               combined="$state"
+            fi
+
+            local merge_ready="false"
+            if [[ "$combined" == "success" ]] &&
+               [[ "$is_draft" == "false" ]] &&
+               [[ "$merge_state" == "CLEAN" ]] &&
+               [[ "$review_decision" == "APPROVED" ]]; then
+              merge_ready="true"
             fi
 
             # Apply label
             local added="" removed=""
             case "$combined" in
               success)
-                gh pr edit "$pr" --add-label "passed" --remove-label "failed,pending" 2>/dev/null || true
-                added="passed"; removed="failed,pending"
+                if [[ "$merge_ready" == "true" ]]; then
+                  gh pr edit "$pr" \
+                    --add-label "passed,Merge Ready" \
+                    --remove-label "failed,pending" \
+                    2>/dev/null || true
+                  added="passed,Merge Ready"; removed="failed,pending"
+                else
+                  gh pr edit "$pr" \
+                    --add-label "passed" \
+                    --remove-label "failed,pending,Merge Ready" \
+                    2>/dev/null || true
+                  added="passed"; removed="failed,pending,Merge Ready"
+                fi
                 ;;
               failure|error)
-                gh pr edit "$pr" --add-label "failed" --remove-label "passed,pending" 2>/dev/null || true
-                added="failed"; removed="passed,pending"
+                gh pr edit "$pr" \
+                  --add-label "failed" \
+                  --remove-label "passed,pending,Merge Ready" \
+                  2>/dev/null || true
+                added="failed"; removed="passed,pending,Merge Ready"
                 ;;
               pending)
-                gh pr edit "$pr" --add-label "pending" --remove-label "passed,failed" 2>/dev/null || true
-                added="pending"; removed="passed,failed"
+                gh pr edit "$pr" \
+                  --add-label "pending" \
+                  --remove-label "passed,failed,Merge Ready" \
+                  2>/dev/null || true
+                added="pending"; removed="passed,failed,Merge Ready"
                 ;;
             esac
 
-            echo "$pr|$combined|status=$state checks=$check_conclusion → added=$added removed=$removed" >> "$RESULTS_FILE"
+            echo "$pr|$combined|status=$state status_count=$status_count checks=$check_conclusion merge=$merge_state review=$review_decision draft=$is_draft ready=$merge_ready -> added=$added removed=$removed" >> "$RESULTS_FILE"
             if [[ -n "$added" ]]; then
               LABELED=$((LABELED + 1))
             fi
           }
 
           for pr in ${PR_LIST}; do
-            echo "── PR #$pr ──"
+            echo "-- PR #$pr --"
             evaluate_pr "$pr"
             PROCESSED=$((PROCESSED + 1))
           done
 
-          echo "processed=$PROCESSED" >> "$GITHUB_OUTPUT"
-          echo "labeled=$LABELED" >> "$GITHUB_OUTPUT"
+          write_github_output processed "$PROCESSED"
+          write_github_output labeled "$LABELED"
           # Pass results file path for summary step
           cp "$RESULTS_FILE" "${GITHUB_WORKSPACE}/pr_results.txt"
 
@@ -246,7 +338,7 @@ jobs:
           MODE="${PR_MODE}"
 
           {
-            echo "### 🏷️ PR Status Labeler Summary"
+            echo "### PR Status Labeler Summary"
             echo ""
             echo "| Field | Value |"
             echo "|-------|-------|"
@@ -258,7 +350,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           if [[ "$MODE" == "none" ]]; then
-            echo "🟦 No open PRs — nothing to label." >> "$GITHUB_STEP_SUMMARY"
+            echo "No open PRs -- nothing to label." >> "$GITHUB_STEP_SUMMARY"
           elif [[ -f "${GITHUB_WORKSPACE}/pr_results.txt" ]]; then
             {
               echo "#### Per-PR Results"
@@ -273,4 +365,4 @@ jobs:
             echo "" >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          echo "✅ Workflow completed." >> "$GITHUB_STEP_SUMMARY"
+          echo "[OK] Workflow completed." >> "$GITHUB_STEP_SUMMARY"

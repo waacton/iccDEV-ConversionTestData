@@ -96,7 +96,7 @@ static icInt32Number icCalcSaturatingIntCast(double v)
   if (v <= (double)std::numeric_limits<icInt32Number>::lowest())
     return std::numeric_limits<icInt32Number>::lowest();
 
-  return std::lround(std::trunc(v));
+  return (icInt32Number) std::lround(std::trunc(v));
 }
 
 static icInt32Number icCalcSaturatingRound(icFloatNumber v)
@@ -117,6 +117,18 @@ static bool icCalcAddUInt32(icUInt32Number a, icUInt32Number b, icUInt32Number &
     return false;
 
   sum = a + b;
+  return true;
+}
+
+static bool icCalcTempSpan(icUInt32Number pos, icUInt32Number countMinusOne,
+                           icUInt32Number nMaxTemp, icUInt32Number &count)
+{
+  if (!icCalcAddUInt32(countMinusOne, 1, count))
+    return false;
+
+  if (pos >= nMaxTemp || count > nMaxTemp - pos)
+    return false;
+
   return true;
 }
 
@@ -4074,7 +4086,9 @@ bool CIccCalculatorFunc::SequenceNeedTempReset(SIccCalcOp *op, icUInt32Number nO
     icSigCalcOp sig = op[i].sig;
     if (sig==icSigTempGetChanOp) {
       icUInt32Number p = op[i].data.select.v1;
-      icUInt32Number n = op[i].data.select.v2+1;
+      icUInt32Number n = 0;
+      if (!icCalcTempSpan(p, op[i].data.select.v2, nMaxTemp, n))
+        return true;
       for (j=0; j<n; j++) {
         if (!tempUsage[p+j]) {
           return true;
@@ -4083,12 +4097,16 @@ bool CIccCalculatorFunc::SequenceNeedTempReset(SIccCalcOp *op, icUInt32Number nO
     }
     else if (sig==icSigTempPutChanOp) {
       icUInt32Number p = op[i].data.select.v1;
-      icUInt32Number n = op[i].data.select.v2+1;
+      icUInt32Number n = 0;
+      if (!icCalcTempSpan(p, op[i].data.select.v2, nMaxTemp, n))
+        return true;
       memset(tempUsage+p, 1, n);
     }
     else if (sig==icSigTempSaveChanOp) {
       icUInt32Number p = op[i].data.select.v1;
-      icUInt32Number n = op[i].data.select.v2+1;
+      icUInt32Number n = 0;
+      if (!icCalcTempSpan(p, op[i].data.select.v2, nMaxTemp, n))
+        return true;
       memset(tempUsage+p, 1, n);
     }
     else if (sig==icSigIfOp) {
@@ -4164,6 +4182,9 @@ bool CIccCalculatorFunc::SequenceNeedTempReset(SIccCalcOp *op, icUInt32Number nO
       if (rv)
         return true;
     }
+
+    if (i == std::numeric_limits<icUInt32Number>::max())
+      return true;
   }
   return false;
 }
@@ -4545,8 +4566,10 @@ CIccMpeCalculator::CIccMpeCalculator(const CIccMpeCalculator &channelGen)
     m_SubElem = (CIccMultiProcessElement**)calloc(m_nSubElem, sizeof(CIccMultiProcessElement*));
     if (m_SubElem) {
       for (i=0; i<m_nSubElem; i++) {
-        if (channelGen.m_SubElem[i])
+        if (channelGen.m_SubElem[i]) {
           m_SubElem[i] = channelGen.m_SubElem[i]->NewCopy();
+          m_SubElem[i]->SetParentObject(this);
+        }
       }
     }
     else {
@@ -4594,8 +4617,10 @@ CIccMpeCalculator &CIccMpeCalculator::operator=(const CIccMpeCalculator &channel
     m_SubElem = (CIccMultiProcessElement**)calloc(m_nSubElem, sizeof(CIccMultiProcessElement*));
     if (m_SubElem) {
       for (i=0; i<m_nSubElem; i++) {
-        if (channelGen.m_SubElem[i])
+        if (channelGen.m_SubElem[i]) {
           m_SubElem[i] = channelGen.m_SubElem[i]->NewCopy();
+          m_SubElem[i]->SetParentObject(this);
+        }
       }
     }
     else {
@@ -4646,8 +4671,10 @@ void CIccMpeCalculator::SetSize(icUInt16Number nInputChannels, icUInt16Number nO
 
   if (m_SubElem) {
     for (i=0; i<m_nSubElem; i++) {
-      if (m_SubElem[i])
+      if (m_SubElem[i]) {
+        m_SubElem[i]->SetParentObject(nullptr);
         delete m_SubElem[i];
+      }
     }
     free(m_SubElem);
     m_SubElem = NULL;
@@ -5282,11 +5309,14 @@ bool CIccMpeCalculator::SetElem(icUInt32Number idx, CIccMultiProcessElement *pEl
     return false;
 
   if ((*pArray)[idx]) {
+    (*pArray)[idx]->SetParentObject(nullptr);
     delete (*pArray)[idx];
     rv = false;
   }
 
   (*pArray)[idx] = pElem;
+  if (pElem)
+    pElem->SetParentObject(this);
 
   return rv;
 }

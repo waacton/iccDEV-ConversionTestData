@@ -14,7 +14,11 @@ point to deeper references.
 | CLI tools and shared option tables | `docs/tools-cli-reference.md` |
 | JSON workflow | `docs/iccjson.md` |
 | JSON tag examples | `docs/iccjson-tag-types.md` |
+| IccConnect library and `CIccConnectCmm` factory | `docs/icc-connect.md` |
+| IccConnect JSON config schema | `docs/icc-connect-config.schema.json` |
+| Threaded CMM apply (`CIccThreadedCmm`) | `docs/icc-cmm-threading.md` |
 | Bisect workflow | `docs/bisect.md` |
+| Pre-PR security cycle | `docs/pre-pr-security-cycle.md` and `.github/skills/pre-pr-security-cycle/SKILL.md` |
 | Regression workflow updates | `docs/regression-workflow-governance.md` |
 | CodeQL queries | `.github/codeql-queries/README.md` |
 | Security issue format | `.github/prompts/SECURITY_ISSUE_FORMAT.md` |
@@ -22,6 +26,7 @@ point to deeper references.
 | Build and sanitizer policy | `.github/instructions/build-system.instructions.md` |
 | Test and regression policy | `.github/instructions/testing.instructions.md` |
 | Workflow hardening | `.github/instructions/workflow-governance.instructions.md` |
+| vcpkg port policy | `.github/instructions/vcpkg-port.instructions.md` |
 | Agent skills | `.github/skills/README.md` |
 | Maintainer CI and CTest workflow | `.github/skills/maintainer-ci-ctest/SKILL.md` and `.github/prompts/maintainer-ci-ctest.prompt.md` |
 | IIS sample setup | `Tools/Winnt/IccIisIsapi/isapi-instructions.md` |

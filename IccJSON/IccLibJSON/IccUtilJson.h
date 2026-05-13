@@ -67,16 +67,12 @@
 #include <string>
 #include <vector>
 
-#ifdef ICC_JSON_ORDERED
 using IccJson = nlohmann::ordered_json;
-#else
-using IccJson = nlohmann::json;
-#endif
 
 // ---------------------------------------------------------------------------
 // Hex data helpers (binary blobs stored as hex strings in JSON)
 // ---------------------------------------------------------------------------
-icUInt32Number icJsonGetHexData(void *pBuf, const char *szText, icUInt32Number nBufSize);
+size_t icJsonGetHexData(void *pBuf, const char *szText, size_t nBufSize);
 icUInt32Number icJsonGetHexDataSize(const char *szText);
 std::string    icJsonDumpHexData(const void *pBuf, size_t nBufSize);
 

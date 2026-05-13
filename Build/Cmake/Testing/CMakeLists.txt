@@ -19,6 +19,13 @@ else()
   set(ICCDEV_CTEST_CONFIG_ARGS)
 endif()
 
+if(WIN32)
+  include("${CMAKE_CURRENT_LIST_DIR}/WindowsRuntimePaths.cmake")
+  iccdev_collect_cache_runtime_path_entries(
+    ICCDEV_WINDOWS_RUNTIME_PATHS
+    "${CMAKE_BINARY_DIR}")
+endif()
+
 add_custom_target(check
   COMMAND "${CMAKE_CTEST_COMMAND}"
           ${ICCDEV_CTEST_CONFIG_ARGS}
@@ -48,6 +55,7 @@ function(iccdev_add_check_dependencies)
       iccToJson
       iccToXml
       iccV5DspObsToV4Dsp
+      iccProfileVisualize
   )
     if(TARGET "${_target}")
       add_dependencies(check "${_target}")
@@ -56,6 +64,57 @@ function(iccdev_add_check_dependencies)
 endfunction()
 
 iccdev_add_check_dependencies()
+
+function(iccdev_add_iccconnect_thread_test)
+  if(NOT TARGET "${TARGET_LIB_ICCCONNECT}")
+    return()
+  endif()
+
+  add_executable(iccConnectThreadTest
+    "${ICCDEV_REPO_ROOT}/.github/ci/regression/iccconnect-threaded-cmm.cpp"
+  )
+  target_compile_features(iccConnectThreadTest PRIVATE cxx_std_17)
+  target_link_libraries(iccConnectThreadTest PRIVATE ${TARGET_LIB_ICCCONNECT})
+
+  add_dependencies(check iccConnectThreadTest)
+
+  if(WIN32)
+    add_test(
+      NAME iccdev.iccconnect-threaded-cmm
+      COMMAND
+        "$<TARGET_FILE:iccConnectThreadTest>"
+        "${ICCDEV_TESTING_DIR}/sRGB_v4_ICC_preference.icc"
+    )
+  else()
+    add_test(
+      NAME iccdev.iccconnect-threaded-cmm
+      COMMAND
+        "${CMAKE_COMMAND}" -E env
+        ${ICCDEV_TEST_ENV}
+        "$<TARGET_FILE:iccConnectThreadTest>"
+        "${ICCDEV_TESTING_DIR}/sRGB_v4_ICC_preference.icc"
+    )
+  endif()
+  set_tests_properties(iccdev.iccconnect-threaded-cmm PROPERTIES
+    WORKING_DIRECTORY "${ICCDEV_REPO_ROOT}"
+    TIMEOUT 60
+    LABELS "iccdev;iccconnect;threaded;regression"
+  )
+  if(WIN32)
+    set(_iccconnect_windows_env_mods
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:iccConnectThreadTest>"
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:${TARGET_LIB_ICCCONNECT}>"
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:${TARGET_LIB_ICCPROFLIB}>"
+    )
+    foreach(_runtime_path IN LISTS ICCDEV_WINDOWS_RUNTIME_PATHS)
+      list(APPEND _iccconnect_windows_env_mods
+        "PATH=path_list_prepend:${_runtime_path}")
+    endforeach()
+    set_tests_properties(iccdev.iccconnect-threaded-cmm PROPERTIES
+      ENVIRONMENT_MODIFICATION "${_iccconnect_windows_env_mods}"
+    )
+  endif()
+endfunction()
 
 if(WIN32)
   function(iccdev_add_windows_batch_test NAME TIMEOUT LABELS SCRIPT)
@@ -107,28 +166,83 @@ if(WIN32)
     )
   endfunction()
 
-  iccdev_add_windows_batch_test(
-    iccdev.windows-create-profiles
-    300
-    "iccdev;windows;setup;profiles"
-    "${ICCDEV_TESTING_DIR}/CreateAllProfiles.bat"
-    EXPECTED_PROFILE_PARSE_COUNT 129
-  )
-  set_tests_properties(iccdev.windows-create-profiles PROPERTIES
-    FIXTURES_SETUP iccdev_profiles
-  )
+  if(TARGET iccFromXml)
+    iccdev_add_windows_batch_test(
+      iccdev.windows-create-profiles
+      300
+      "iccdev;windows;setup;profiles"
+      "${ICCDEV_TESTING_DIR}/CreateAllProfiles.bat"
+      EXPECTED_PROFILE_PARSE_COUNT 129
+    )
+    set_tests_properties(iccdev.windows-create-profiles PROPERTIES
+      FIXTURES_SETUP iccdev_profiles
+    )
+  endif()
 
-  iccdev_add_windows_batch_test(
-    iccdev.windows-legacy-run-tests
-    300
-    "iccdev;windows;legacy;profiles"
-    "${ICCDEV_TESTING_DIR}/RunTests.bat"
-    EXPECTED_OUTPUT "JSON round-trip: PASS"
-    FORBIDDEN_REGEX "JSON round-trip: FAIL|not found -- skipping JSON tests"
-  )
-  set_tests_properties(iccdev.windows-legacy-run-tests PROPERTIES
-    FIXTURES_REQUIRED iccdev_profiles
-  )
+  if(TARGET iccFromXml AND TARGET iccApplyNamedCmm AND TARGET iccToJson AND TARGET iccFromJson)
+    iccdev_add_windows_batch_test(
+      iccdev.windows-legacy-run-tests
+      300
+      "iccdev;windows;legacy;profiles"
+      "${ICCDEV_TESTING_DIR}/RunTests.bat"
+      EXPECTED_OUTPUT "JSON round-trip: PASS"
+      FORBIDDEN_REGEX "JSON round-trip: FAIL|not found -- skipping JSON tests"
+    )
+    set_tests_properties(iccdev.windows-legacy-run-tests PROPERTIES
+      FIXTURES_REQUIRED iccdev_profiles
+    )
+  endif()
+
+  if(TARGET iccDumpProfile)
+    add_test(
+      NAME iccdev.windows-icc-dump-profile-smoke
+      COMMAND
+        "${CMAKE_COMMAND}"
+        "-DICCDEV_TEST_NAME=iccdev.windows-icc-dump-profile-smoke"
+        "-DICCDEV_TEST_OUTDIR=${ICCDEV_TEST_OUTDIR}/iccdev-windows-icc-dump-profile-smoke"
+        "-DICCDEV_BUILD_DIR=${CMAKE_BINARY_DIR}"
+        "-DICCDEV_ICCDUMP_EXE=$<TARGET_FILE:iccDumpProfile>"
+        "-DICCDEV_PROFILE=${ICCDEV_TESTING_DIR}/CalcTest/calcUnderStack_add.icc"
+        "-DICCDEV_EXPECTED_PROFILE_SIZE=3932"
+        "-DICCDEV_EXPECTED_TAG_COUNT=8"
+        -P "${CMAKE_CURRENT_LIST_DIR}/RunWindowsDumpProfileSmokeTest.cmake"
+    )
+    set_tests_properties(iccdev.windows-icc-dump-profile-smoke PROPERTIES
+      WORKING_DIRECTORY "${ICCDEV_TEST_OUTDIR}"
+      TIMEOUT 60
+      LABELS "iccdev;windows;tools;profile"
+    )
+    add_dependencies(check iccDumpProfile)
+  endif()
+
+  if(ENABLE_SHARED_LIBS AND TARGET IccProfLib2)
+    add_test(
+      NAME iccdev.issue-987-shared-mpe-export
+      COMMAND
+        "${CMAKE_COMMAND}"
+        "-DICCDEV_TEST_NAME=iccdev.issue-987-shared-mpe-export"
+        "-DICCDEV_TEST_OUTDIR=${ICCDEV_TEST_OUTDIR}/iccdev-issue-987-shared-mpe-export"
+        "-DICCDEV_REPO_ROOT=${ICCDEV_REPO_ROOT}"
+        "-DICCDEV_BUILD_DIR=${CMAKE_BINARY_DIR}"
+        "-DICCDEV_CONFIG=$<CONFIG>"
+        "-DICCDEV_ICCPROFLIB_DLL=$<TARGET_FILE:IccProfLib2>"
+        "-DICCDEV_ICCPROFLIB_IMPLIB=$<TARGET_LINKER_FILE:IccProfLib2>"
+        "-DICCDEV_GENERATOR=${CMAKE_GENERATOR}"
+        "-DICCDEV_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+        "-DICCDEV_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+        "-DICCDEV_CXX_COMPILER_ID=${CMAKE_CXX_COMPILER_ID}"
+        "-DICCDEV_OBJDUMP=${CMAKE_OBJDUMP}"
+        -P "${CMAKE_CURRENT_LIST_DIR}/RunWindowsSharedExportTest.cmake"
+    )
+    set_tests_properties(iccdev.issue-987-shared-mpe-export PROPERTIES
+      WORKING_DIRECTORY "${ICCDEV_TEST_OUTDIR}"
+      TIMEOUT 180
+      LABELS "iccdev;windows;shared;issue-987"
+    )
+    add_dependencies(check IccProfLib2)
+  endif()
+
+  iccdev_add_iccconnect_thread_test()
 
   return()
 endif()
@@ -155,11 +269,12 @@ set(ICCDEV_TOOL_PATHS
   "${ICCDEV_TOOLS_DIR}/IccToJson"
   "${ICCDEV_TOOLS_DIR}/IccToXml"
   "${ICCDEV_TOOLS_DIR}/IccV5DspObsToV4Dsp"
+  "${ICCDEV_TOOLS_DIR}/IccProfileVisualize"
 )
 
 list(JOIN ICCDEV_TOOL_PATHS ":" ICCDEV_TOOL_PATH)
 set(ICCDEV_SHARED_LIBRARY_PATH
-    "${CMAKE_BINARY_DIR}/IccProfLib:${CMAKE_BINARY_DIR}/IccXML:${CMAKE_BINARY_DIR}/IccJSON")
+    "${CMAKE_BINARY_DIR}/IccProfLib:${CMAKE_BINARY_DIR}/IccXML:${CMAKE_BINARY_DIR}/IccJSON:${CMAKE_BINARY_DIR}/IccConnect")
 
 set(ICCDEV_TEST_ENV
   "PATH=${ICCDEV_TOOL_PATH}:$ENV{PATH}"
@@ -173,6 +288,8 @@ set(ICCDEV_TEST_ENV
   "ICCDEV_BUILD_DIR=${CMAKE_BINARY_DIR}"
   "ICCDEV_REQUIRE_JSON_ROUNDTRIP=1"
 )
+
+iccdev_add_iccconnect_thread_test()
 
 function(iccdev_add_script_test NAME TIMEOUT LABELS WORKING_DIRECTORY SCRIPT)
   if(NOT EXISTS "${SCRIPT}")
@@ -220,13 +337,44 @@ set_tests_properties(iccdev.legacy-run-tests PROPERTIES
 
 iccdev_add_script_test(
   iccdev.tool-coverage
-  900
+  300
   "iccdev;tools;asan;regression"
   "${ICCDEV_REPO_ROOT}"
   "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-tool-coverage-baseline.sh"
   --asan
+  --skip-hybrid
 )
 set_tests_properties(iccdev.tool-coverage PROPERTIES
+  FIXTURES_REQUIRED iccdev_profiles
+)
+
+iccdev_add_script_test(
+  iccdev.hybrid-pipeline
+  900
+  "iccdev;tools;hybrid;asan;regression;slow"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-hybrid-pipeline-tests.sh"
+)
+set_tests_properties(iccdev.hybrid-pipeline PROPERTIES
+  FIXTURES_REQUIRED iccdev_profiles
+)
+
+iccdev_add_script_test(
+  iccdev.specsep-tiff-geometry-regression
+  120
+  "iccdev;specsep;tiff;geometry;regression;asan"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-specsep-tiff-geometry-regression-tests.sh"
+)
+
+iccdev_add_script_test(
+  iccdev.dump-profile-header-regression
+  120
+  "iccdev;dump;profile;header;regression;asan"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-dump-profile-header-regression-tests.sh"
+)
+set_tests_properties(iccdev.dump-profile-header-regression PROPERTIES
   FIXTURES_REQUIRED iccdev_profiles
 )
 
@@ -370,6 +518,17 @@ iccdev_add_script_test(
   "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-version-bcd-regression-tests.sh"
 )
 set_tests_properties(iccdev.version-bcd-regressions PROPERTIES
+  FIXTURES_REQUIRED iccdev_profiles
+)
+
+iccdev_add_script_test(
+  iccdev.profile-visualize-regressions
+  300
+  "iccdev;profile;visualize;regression;asan"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-profile-visualize-tests.sh"
+)
+set_tests_properties(iccdev.profile-visualize-regressions PROPERTIES
   FIXTURES_REQUIRED iccdev_profiles
 )
 

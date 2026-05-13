@@ -11,7 +11,11 @@ working with ICC.1 and ICC.2/iccMAX color profiles.
 - [CLI tool reference](tools-cli-reference.md): command-line tool summary and shared options
 - [IccJSON guide](iccjson.md): JSON conversion workflow
 - [ICC JSON tag reference](iccjson-tag-types.md): detailed JSON tag examples
+- [IccConnect library](icc-connect.md): JSON-driven CMM construction via `CIccConnectCmm`
+- [CIccThreadedCmm](icc-cmm-threading.md): parallel CMM apply decorator
 - [Bisecting regressions](bisect.md): focused debug workflow
+- [Linear stack workflow](linear-stack-workflow.md): rebase feature branches and stack commits without merge commits
+- [Pre-PR security cycle](pre-pr-security-cycle.md): maintainer loop for build/test, SAST, CodeQL, dynamic checks, and fixes
 - [Regression workflow governance](regression-workflow-governance.md): adding regression gates and tool-test workflow updates
 - [CodeQL security analysis](codeql.md): custom query overview
 - [Documentation maintenance](documentation-maintenance.md): canonical sources and review checklist
@@ -21,9 +25,10 @@ working with ICC.1 and ICC.2/iccMAX color profiles.
 
 | Library | Purpose |
 |---------|---------|
-| `IccProfLib` | Reference C++ library for reading, writing, applying, and validating ICC profiles. |
+| `IccProfLib` | Reference C++ library for reading, writing, applying, and validating ICC profiles. Includes `CIccThreadedCmm` for parallel apply (see [threading guide](icc-cmm-threading.md)). |
 | `IccLibXML` | XML serialization layer for profiles and profile objects. |
 | `IccLibJSON` | JSON serialization layer for profile inspection, editing, and round-tripping. |
+| `IccConnect` | Factory library that builds a fully initialized CMM from JSON-driven configuration (see [IccConnect guide](icc-connect.md)). |
 
 ## Tools
 
@@ -45,6 +50,7 @@ tables.
 | `iccTiffDump`, `iccPngDump`, `iccJpegDump` | Inspect image metadata and embedded ICC profiles. |
 | `iccV5DspObsToV4Dsp` | Convert v5 display/observer profiles to v4 display profiles. |
 | `iccFromCube` | Convert `.cube` 3D LUTs to ICC.2 DeviceLink profiles. |
+| `iccProfileVisualize` | Convert profile LUT data to images and PDF graphs. |
 | `wxProfileDump` | wxWidgets GUI profile inspector. |
 
 ## Example iccMAX Profiles

@@ -1,11 +1,11 @@
 ###############################################################
 #
-# Copyright (©) 2025 International Color Consortium.
+# Copyright (c) 2025 International Color Consortium.
 #                 All rights reserved.
 #                 https://color.org
 #
 #
-# Intent: Windows MSVC build and test pipeline for PR validation
+# Intent: Windows MSVC and MinGW build and test pipeline for PR validation
 #
 # Last Updated: 2026-04-05 23:41:13 UTC by David Hoyt
 #               Review Permissions
@@ -19,10 +19,9 @@ name: ci-pr-win
 
 permissions:
   contents: read
-  pull-requests: read
+  pull-requests: read  # Required by reusable PR build callers.
 
 on:
-  workflow_dispatch:
   workflow_call:
 
 concurrency:
@@ -38,7 +37,8 @@ env:
 
 jobs:
   build:
-    runs-on: windows-latest
+    name: Windows MSVC build
+    runs-on: windows-2022
     timeout-minutes: 20
     defaults:
       run:
@@ -135,11 +135,12 @@ jobs:
           # Source the sanitization functions
           . .github/scripts/sanitize.ps1
           # Quick validation tests
+          $unicodeInput = "Hello " + [char]0x4E16 + [char]0x754C
           $tests = @(
               @{Name="XSS prevention"; Input="<script>alert(1)</script>"; Expected="&lt;script&gt;alert(1)&lt;/script&gt;"},
               @{Name="HTML entities"; Input="A&B"; Expected="A&amp;B"},
               @{Name="Quotes"; Input="'test'"; Expected="&#39;test&#39;"},
-              @{Name="Unicode"; Input="Hello 世界"; Expected="Hello 世界"},
+              @{Name="Unicode"; Input=$unicodeInput; Expected=$unicodeInput},
               @{Name="Null bytes"; Input="test$([char]0x00)null"; Expected="testnull"},
               @{Name="CR/LF"; Input="line1`r`nline2"; Expected="line1 line2"}
           )
@@ -148,10 +149,10 @@ jobs:
           foreach ($test in $tests) {
               $result = Sanitize-Line -InputString $test.Input
               if ($result -eq $test.Expected) {
-                  Write-Host "  ✅ PASS: $($test.Name)" -ForegroundColor Green
+                  Write-Host "  [OK] PASS: $($test.Name)" -ForegroundColor Green
                   $pass++
               } else {
-                  Write-Host "  ❌ FAIL: $($test.Name)" -ForegroundColor Red
+                  Write-Host "  [FAIL] FAIL: $($test.Name)" -ForegroundColor Red
                   Write-Host "     Expected: [$($test.Expected)]"
                   Write-Host "     Got:      [$result]"
                   $fail++
@@ -163,7 +164,7 @@ jobs:
               throw "Sanitization tests failed"
           }
           Write-Host ""
-          Write-Host "✅ All sanitization functions validated" -ForegroundColor Green
+          Write-Host "[OK] All sanitization functions validated" -ForegroundColor Green
           Write-Host ""
 
       - name: Setup MSBuild
@@ -244,8 +245,7 @@ jobs:
           cmake --build build -- /m /maxcpucount
           cmake --build build -- /m /maxcpucount
 
-      - name: Create Profiles
-        continue-on-error: true
+      - name: Run Windows CTest check
         shell: pwsh -NoProfile -NoLogo -NonInteractive -Command {0}
         env:
           POWERSHELL_TELEMETRY_OPTOUT: "1"
@@ -260,54 +260,8 @@ jobs:
             }
           pwd
           cd Build/Cmake
-          Write-Host "========= Creating Profiles ... ================`n"
-          $exeDirs = Get-ChildItem -Recurse -File -Include *.exe -Path .\build\ |
-              Where-Object { $_.FullName -match 'icc' -and $_.FullName -notmatch '\\CMakeFiles\\' -and $_.Name -notmatch '^CMake(C|CXX)CompilerId\.exe$' } |
-              ForEach-Object { Split-Path $_.FullName -Parent } |
-              Sort-Object -Unique
-          $env:PATH = ($exeDirs -join ';') + ';' + $env:PATH
-          $env:PATH -split ';' | Select-String "icc"
-          $toolDirs = Get-ChildItem -Recurse -File -Include *.exe -Path .\Tools\ | ForEach-Object { Split-Path -Parent $_.FullName } | Sort-Object -Unique
-          $env:PATH = ($toolDirs -join ';') + ';' + $env:PATH
-          $env:PATH -split ';'
-          pwd
-          cd ..\..\Testing
-          .\CreateAllProfiles.bat
-          .\RunTests.bat
-          cd CalcTest\
-          .\checkInvalidProfiles.bat
-          .\runtests.bat
-          cd ..\Display
-          .\RunProtoTests.bat
-          cd ..\HDR
-          .\mkprofiles.bat
-          cd ..\mcs\
-          .\updateprev.bat
-          .\updateprevWithBkgd.bat
-          cd ..\Overprint
-          .\RunTests.bat
-          cd ..
-          cd hybrid
-          try { .\BuildAndTest.bat } catch { Write-Host "BuildAndTest.bat exited with error (continue-on-error): $_" }
-          cd ..
-          cd ..
-          pwd
-          # Collect .icc profile information
-          $profiles = Get-ChildItem -Path . -Filter "*.icc" -Recurse -File
-          $totalCount = $profiles.Count
-          # Group profiles by directory
-          $groupedProfiles = $profiles | Group-Object { $_.Directory.FullName }
-          # Generate Summary Report
-          Write-Host "`n========================="
-          Write-Host " ICC Profile Report"
-          Write-Host "========================="
-          # Print count per subdirectory
-          foreach ($group in $groupedProfiles) {
-              Write-Host ("{0}: {1} .icc profiles" -f $group.Name, $group.Count)
-          }
-          Write-Host "`nTotal .icc profiles found: $totalCount"
-          Write-Host "=========================`n"
-          Write-Host "All Done!"
+          Write-Host "========= Running CTest check ... ================`n"
+          cmake --build build --config Debug --target check -- /m /maxcpucount
       - name: GitHub Summary
         if: always()
         shell: pwsh -NoProfile -NoLogo -NonInteractive -Command {0}
@@ -329,7 +283,7 @@ jobs:
           # Use canonical sanitization from .github/scripts/sanitize.ps1
           # PowerShell dot-sourcing: loads the script into the current scope
           . .github/scripts/sanitize.ps1
-          "## 🧱 CMake Windows Build Summary" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          "## CMake Windows Build Summary" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "Repository: $(Sanitize-Line $env:GH_REPOSITORY)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "Run URL: $(Sanitize-Line $env:GH_RUN_URL)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
@@ -339,3 +293,155 @@ jobs:
           "Runner OS: $(Sanitize-Line $env:GH_RUNNER_OS)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "Status: $(Sanitize-Line $env:GH_JOB_STATUS)" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
           "" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+  mingw-smoke:
+    name: MinGW UCRT64 smoke
+    runs-on: windows-2022
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: pwsh -NoProfile -NoLogo -NonInteractive -Command {0}
+
+    steps:
+      - name: Checkout PR source
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0 (node24)
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.ref }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup MSYS2 UCRT64 MinGW
+        id: setup-msys2
+        uses: msys2/setup-msys2@e9898307ac31d1a803454791be09ab9973336e1c  # v2.31.1
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-make
+            mingw-w64-ucrt-x86_64-libxml2
+            mingw-w64-ucrt-x86_64-libpng
+            mingw-w64-ucrt-x86_64-libtiff
+            mingw-w64-ucrt-x86_64-libjpeg-turbo
+            mingw-w64-ucrt-x86_64-nlohmann-json
+
+      - name: Run MinGW build and CTest check
+        env:
+          POWERSHELL_TELEMETRY_OPTOUT: 1
+          POWERSHELL_UPDATECHECK: Off
+          MSYS2_LOCATION: ${{ steps.setup-msys2.outputs.msys2-location }}
+        run: |
+          Set-StrictMode -Version Latest
+          $ErrorActionPreference = 'Stop'
+          $PSDefaultParameterValues['*:ErrorAction'] = 'Stop'
+          $ProgressPreference = 'SilentlyContinue'
+          $env:GH_NO_UPDATE_NOTIFIER = '1'
+          $env:GH_PROMPT_DISABLED = '1'
+
+          git config --global credential.helper ""
+          if (Test-Path env:GITHUB_TOKEN) { Remove-Item env:GITHUB_TOKEN }
+          if (Test-Path env:ACTIONS_ID_TOKEN_REQUEST_URL) {
+            Remove-Item env:ACTIONS_ID_TOKEN_REQUEST_URL
+          }
+          if (Test-Path env:ACTIONS_ID_TOKEN_REQUEST_TOKEN) {
+            Remove-Item env:ACTIONS_ID_TOKEN_REQUEST_TOKEN
+          }
+          . .github/scripts/sanitize.ps1
+
+          $msysRoot = [System.IO.Path]::GetFullPath($env:MSYS2_LOCATION)
+          $ucrtRoot = Join-Path $msysRoot 'ucrt64'
+          $ucrtBin = Join-Path $msysRoot 'ucrt64\bin'
+          $usrBin = Join-Path $msysRoot 'usr\bin'
+          $env:PATH = "$ucrtBin;$usrBin;$env:PATH"
+          $workspace = [System.IO.Path]::GetFullPath($env:GITHUB_WORKSPACE)
+          git config --global --add safe.directory $workspace
+
+          $sourceDir = Join-Path $workspace 'Build\Cmake'
+          $buildDir = Join-Path $sourceDir 'build-mingw-pr-smoke'
+          $cmake = Join-Path $ucrtBin 'cmake.exe'
+          $ctest = Join-Path $ucrtBin 'ctest.exe'
+          $gcc = Join-Path $ucrtBin 'x86_64-w64-mingw32-gcc.exe'
+          $gxx = Join-Path $ucrtBin 'x86_64-w64-mingw32-g++.exe'
+          $ninja = Join-Path $ucrtBin 'ninja.exe'
+
+          foreach ($tool in @($cmake, $ctest, $gcc, $gxx, $ninja)) {
+            if (-not (Test-Path -LiteralPath $tool)) {
+              throw "Required MinGW tool missing: $(Sanitize-Line $tool)"
+            }
+          }
+
+          function Invoke-Native {
+            param(
+              [Parameter(Mandatory = $true)][string] $FilePath,
+              [Parameter(Mandatory = $true)][string[]] $Arguments
+            )
+            & $FilePath @Arguments
+            if ($LASTEXITCODE -ne 0) {
+              throw "$(Sanitize-Line $FilePath) failed with exit code $LASTEXITCODE"
+            }
+          }
+
+          if (Test-Path -LiteralPath $buildDir) {
+            Remove-Item -Recurse -Force -LiteralPath $buildDir
+          }
+
+          Invoke-Native $cmake @(
+            '-S', $sourceDir,
+            '-B', $buildDir,
+            '-G', 'Ninja',
+            '-DCMAKE_BUILD_TYPE=Release',
+            "-DCMAKE_C_COMPILER=$gcc",
+            "-DCMAKE_CXX_COMPILER=$gxx",
+            "-DCMAKE_PREFIX_PATH=$ucrtRoot",
+            '-DENABLE_TOOLS=ON',
+            '-DENABLE_ICCXML=ON',
+            '-DENABLE_ICCJSON=ON',
+            '-DENABLE_IMAGE_TOOLS=ON',
+            '-DENABLE_WXWIDGETS=OFF',
+            '-DENABLE_CMM_TOOLS=OFF',
+            '-DENABLE_IIS_TOOLS=OFF',
+            '-DENABLE_TESTS=ON',
+            '-DENABLE_SHARED_LIBS=OFF',
+            '-DENABLE_STATIC_LIBS=ON'
+          )
+          Invoke-Native $cmake @(
+            '--build', $buildDir,
+            '--parallel'
+          )
+          Invoke-Native $ctest @(
+            '--test-dir', $buildDir,
+            '-N',
+            '--no-tests=error'
+          )
+          Invoke-Native $cmake @(
+            '--build', $buildDir,
+            '--target', 'check',
+            '--parallel'
+          )
+
+          $compilerLine = (& $gxx --version)[0]
+          $summaryLines = @(
+            '### Windows MinGW UCRT64 smoke',
+            '',
+            "- Compiler: ``$(Sanitize-Line $compilerLine)``",
+            "- Build scope: ``full configured command-line project``",
+            "- Build type: ``Release``",
+            "- Linkage: ``static``",
+            "- CTest: ``all registered MinGW suites``",
+            "- Result: ``passed``"
+          )
+          $summaryLines | ForEach-Object {
+            Sanitize-Print $_
+          } | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append -Encoding utf8
+
+      - name: Upload MinGW smoke results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: ci-pr-win-mingw-smoke-results
+          path: Build/Cmake/build-mingw-pr-smoke/Testing
+          if-no-files-found: warn
+          retention-days: 14
+          compression-level: 9

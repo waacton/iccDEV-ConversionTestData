@@ -5,7 +5,7 @@
 #                 https://color.org
 #
 ## Intent: CodeQL security analysis with custom iccDEV queries
-##         Generates local SARIF report as artifact (no upload)
+##         Uploads SARIF and stores a local report artifact
 #
 ## Last Updated: 2026-04-09 by David Hoyt
 #
@@ -13,7 +13,15 @@
 
 name: "ci-codeql-security"
 
+permissions:
+  contents: read
+
 on:
+  pull_request:
+    branches:
+      - master
+    types:
+      - labeled
   push:
     branches:
       - master
@@ -31,21 +39,25 @@ on:
       - '.github/workflows/ci-codeql-security.yml'
   schedule:
     - cron: '0 6 * * 1'
-  workflow_dispatch:
-
 concurrency:
-  group: "codeql-${{ github.ref }}"
+  group: "codeql-${{ github.workflow }}-${{ github.head_ref || github.ref_name }}"
   cancel-in-progress: true
 
 jobs:
   analyze:
+    if: >-
+      github.event_name != 'pull_request' ||
+      (
+        github.event.action == 'labeled' &&
+        github.event.label.name == 'codeql-ready'
+      )
     name: CodeQL Security Analysis
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
       contents: read
-      actions: read
-      security-events: write
+      actions: read  # Required to correlate CodeQL upload with workflow metadata.
+      security-events: write  # Required to upload SARIF code scanning results.
 
     steps:
       - name: Checkout repository
@@ -80,9 +92,12 @@ jobs:
           if ! command -v codeql >/dev/null 2>&1; then
             CODEQL_VER="2.24.1"
             CODEQL_ARCHIVE="/tmp/codeql-bundle-linux64.tar.gz"
+            CODEQL_SHA256="9767468e00a505ed022eedcf5813dd47760567a400ead7bf2519ce22f953dde1"
+            CODEQL_URL="https://github.com/github/codeql-action/releases/download"
             curl -fsSL --retry 3 \
               -o "${CODEQL_ARCHIVE}" \
-              "https://github.com/github/codeql-action/releases/download/codeql-bundle-v${CODEQL_VER}/codeql-bundle-linux64.tar.gz"
+              "${CODEQL_URL}/codeql-bundle-v${CODEQL_VER}/codeql-bundle-linux64.tar.gz"
+            printf '%s  %s\n' "${CODEQL_SHA256}" "${CODEQL_ARCHIVE}" | sha256sum -c -
             tar xzf "${CODEQL_ARCHIVE}" -C /opt
             echo "/opt/codeql" >> "$GITHUB_PATH"
           fi
@@ -179,21 +194,21 @@ jobs:
 
       - name: Upload standard CodeQL SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@b25d0ebf40e5b63ee81e1bd6e5d2a12b7c2aeb61  # v4
+        uses: github/codeql-action/upload-sarif@68bde559dea0fdcac2102bfdf6230c5f70eb485e  # v4
         with:
           sarif_file: codeql-results/cpp-security-and-quality.sarif
           category: iccdev-standard-cpp-security-and-quality
 
       - name: Upload iccDEV custom SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@b25d0ebf40e5b63ee81e1bd6e5d2a12b7c2aeb61  # v4
+        uses: github/codeql-action/upload-sarif@68bde559dea0fdcac2102bfdf6230c5f70eb485e  # v4
         with:
           sarif_file: codeql-results/iccdev-security.sarif
           category: iccdev-custom-security
 
       - name: Upload IccJSON custom SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@b25d0ebf40e5b63ee81e1bd6e5d2a12b7c2aeb61  # v4
+        uses: github/codeql-action/upload-sarif@68bde559dea0fdcac2102bfdf6230c5f70eb485e  # v4
         with:
           sarif_file: codeql-results/iccdev-jsonlib-security.sarif
           category: iccdev-jsonlib-security

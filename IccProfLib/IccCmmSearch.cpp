@@ -227,6 +227,13 @@ CIccCmmSearch::~CIccCmmSearch()
 
   if (m_pDstProfile)
     delete m_pDstProfile;
+
+  if (m_pDstInitProfile)
+    delete m_pDstInitProfile;
+
+  for (auto pPcc : m_pcc) {
+    delete pPcc;
+  }
 }
 
 //virtual CIccPCS *GetPCS() { return new CIccPCS(); }
@@ -451,4 +458,3 @@ icStatusCMM CIccCmmSearch::RemoveAllIO()
 
   return icCmmStatOk;
 }
-

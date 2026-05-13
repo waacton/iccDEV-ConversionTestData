@@ -44,12 +44,20 @@ when practical.
 
 - `check` must exist on every platform.
 - `check` and workflow CTest execution must use `--no-tests=error`.
-- Linux suite count assertions currently expect `Total Tests: 17`.
-- Windows currently registers 2 CTest suites and validates 129 profile parses.
+- Linux suite count assertions currently expect `Total Tests: 22`.
+- Adding checks inside `iccdev-tool-coverage-baseline.sh` does not change that
+  count; validate the direct script and `ctest -R '^iccdev\.tool-coverage$'`.
+- Windows currently registers 5 CTest suites.
+- Generated-profile gates currently validate 207 ICC profiles.
 - JSON round-trip profile generation validates 129 profile parses.
 - WASM parity currently expects 207 generated ICC profiles.
 - Windows batch CTest runs must use the disposable Testing copy under the build
   tree and must not dirty the source `Testing/` directory.
+- Windows executable tests must receive runtime DLL directories through
+  `Build/Cmake/Testing/WindowsRuntimePaths.cmake`; do not rely on a developer or
+  runner shell `PATH` for vcpkg or MinGW runtime DLLs.
+- MinGW builds still need UCRT64 `bin` on the invoking shell `PATH` because GCC
+  subprocesses such as `cc1plus.exe` depend on MSYS2 runtime DLLs during build.
 
 ## Workflow Rules
 
@@ -59,7 +67,8 @@ when practical.
 - Use least-privilege permissions and credential cleanup.
 - Sanitize all `GITHUB_STEP_SUMMARY` and `GITHUB_OUTPUT` writes.
 - Trigger shared-concurrency workflows sequentially to avoid canceling your own
-  run. `iccDEV Tool Tests` and `ci-regression-checks` share the CTest group.
+  run. Use `ci-pr-action` for normal maintainer validation and
+  `ci-regression-checks` through that orchestrator for ASAN/UBSAN CTest coverage.
 
 ## Local Validation
 
@@ -70,6 +79,16 @@ cmake -S Build/Cmake -B build -DENABLE_TOOLS=ON -DENABLE_TESTS=ON -DENABLE_WXWID
 cmake --build build --parallel "$(nproc)"
 ctest --test-dir build -N --no-tests=error
 ctest --test-dir build --output-on-failure --no-tests=error
+```
+
+For tool coverage script changes:
+
+```bash
+ICCDEV_TOOLS_DIR=$PWD/build/Tools \
+ICCDEV_TESTING_DIR=$PWD/Testing \
+ICCDEV_TEST_OUTDIR=/tmp/iccdev-tool-output \
+  .github/scripts/iccdev-tool-coverage-baseline.sh --asan --quick
+ctest --test-dir build -R '^iccdev\.tool-coverage$' --output-on-failure
 ```
 
 For workflow YAML:
@@ -88,9 +107,9 @@ manifest entries, CRT mismatch warnings, and skipped smoke coverage.
 After pushing, trigger only the workflows affected by the change:
 
 ```bash
-gh workflow run "iccDEV Tool Tests" --repo InternationalColorConsortium/iccDEV --ref <branch>
-gh workflow run "ci-json-roundtrip" --repo InternationalColorConsortium/iccDEV --ref <branch>
-gh workflow run "ci-regression-checks" --repo InternationalColorConsortium/iccDEV --ref <branch>
+gh workflow run "ci-pr-action" --repo InternationalColorConsortium/iccDEV --ref <branch> -f ci_scope=full
+gh workflow run "ci-risk-analysis" --repo InternationalColorConsortium/iccDEV --ref <branch> \
+  -f analysis_target="Specific git ref" -f git_ref=<full-sha> -f severity_threshold=HIGH -f fail_on_findings=true
 ```
 
 Wait for shared-concurrency workflows one at a time. Capture run IDs, head SHA,

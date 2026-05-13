@@ -12,6 +12,7 @@
 # Auto-source path.sh if present (sets PATH and LD_LIBRARY_PATH/DYLD_LIBRARY_PATH)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [ -f "$SCRIPT_DIR/path.sh" ]; then
+	# shellcheck source=/dev/null
 	. "$SCRIPT_DIR/path.sh"
 fi
 
@@ -139,6 +140,11 @@ else
 		RUNTEST_STATUS=1
 	fi
 fi
+
+echo "==========================================================================="
+echo "Test iccProfileVisualize with sRGBv4_preference"
+iccProfileVisualize sRGB_v4_ICC_preference.icc
+
 
 echo "====================== Exiting Testing/RunTests.sh =========================="
 exit "$RUNTEST_STATUS"

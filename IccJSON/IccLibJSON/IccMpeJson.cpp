@@ -302,9 +302,11 @@ public:
       return false;
     }
     const IccJson &arr = j["samples"];
-    if (!SetSize(icJsonSafeU32(arr.size())))
+    bool sizeOverflow = false;
+    icUInt32Number nSamples = icJsonSafeU32(arr.size(), &sizeOverflow);
+    if (sizeOverflow || !SetSize(nSamples))
       return false;
-    for (icUInt32Number i = 0; i < icJsonSafeU32(arr.size()); i++) {
+    for (icUInt32Number i = 0; i < nSamples; i++) {
       if (!icJsonGetFloatNumber(arr[i], m_pSamples[i])) {
         parseStr += "samples contains non-numeric value in SampledSegment\n";
         return false;
@@ -434,9 +436,11 @@ public:
       return false;
     }
     const IccJson &arr = j["samples"];
-    if (!SetSize(icJsonSafeU32(arr.size())))
+    bool sizeOverflow = false;
+    icUInt32Number nSamples = icJsonSafeU32(arr.size(), &sizeOverflow);
+    if (sizeOverflow || !SetSize(nSamples))
       return false;
-    for (icUInt32Number i = 0; i < icJsonSafeU32(arr.size()); i++) {
+    for (icUInt32Number i = 0; i < nSamples; i++) {
       if (!icJsonGetFloatNumber(arr[i], m_pSamples[i])) {
         parseStr += "samples contains non-numeric value in SingleSampledCurve\n";
         return false;
@@ -736,7 +740,7 @@ bool CIccMpeJsonTintArray::ParseJson(const IccJson &j, std::string &parseStr)
       size_t fileLen = pIO->GetLength();
       char *buf = new(std::nothrow) char[fileLen + 1];
       if (!buf) { delete pIO; parseStr += "Out of memory\n"; delete pTag; return false; }
-      icUInt32Number nRead = pIO->Read8(buf, (icUInt32Number)fileLen);
+      size_t nRead = pIO->Read8(buf, (icUInt32Number)fileLen);
       buf[nRead] = '\0';
       delete pIO;
 
