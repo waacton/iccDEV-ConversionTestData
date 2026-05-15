@@ -1165,7 +1165,7 @@ void CIccProfile::InitHeader()
   time_t long_time;
 
   time( &long_time );                /* Get time as long integer. */
-  newtime = gmtime( &long_time ); 
+  newtime = gmtime( &long_time );
 
   m_Header.date.year = newtime->tm_year+1900;
   m_Header.date.month = newtime->tm_mon+1;
