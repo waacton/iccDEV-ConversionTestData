@@ -2,23 +2,31 @@
 # CODEOWNERS - https://github.com/InternationalColorConsortium
 # ============================================================
 #
-# Updated 2026-05-12 17:16:37 UTC by David Hoyt @xsscx
+# Updated 2026-05-16 07:29:45 UTC by David Hoyt @xsscx
 # Intent: Governance, Transparency, Best Practice
-# Last Modification: Add Points of Contact
-#
+# Last Modification: Low-noise transition ownership
+# Note: Temporary transition profile. No wildcard fallback.
+# Note: .github/** and Build/** intentionally unowned for automation elasticity.
 # ============================================================
 
-# Notify Default
-# Triage Points of Contact
-* @ChrisCoxArt @xsscx
+# Core JSON/config source
+IccJSON/**/*.cpp @maxderhak
+IccJSON/**/*.h @maxderhak
 
-# GitHub Actions workflows & PR automation
-.github/** @xsscx @ChrisCoxArt @dwtza
+# Core connection source
+IccConnect/**/*.cpp @maxderhak
+IccConnect/**/*.h @maxderhak
 
-# Protect the CODEOWNERS file itself
-.github/CODEOWNERS @maxderhak @dwtza @colourbill-ctrl @ChrisCoxArt @xsscx
+# Core profile library source
+IccProfLib/**/*.cpp @ChrisCoxArt @colourbill-ctrl @maxderhak
+IccProfLib/**/*.h @ChrisCoxArt @colourbill-ctrl @maxderhak
 
-# Governance: protect CODEOWNERS and key security/docs
-SECURITY.md @maxderhak @dwtza @colourbill-ctrl @ChrisCoxArt @xsscx
-README.md @maxderhak @colourbill-ctrl @ChrisCoxArt @xsscx
-docs/** @maxderhak @dwtza @colourbill-ctrl @ChrisCoxArt @xsscx
+# Core XML library source
+IccXML/**/*.cpp @ChrisCoxArt @colourbill-ctrl @maxderhak
+IccXML/**/*.h @ChrisCoxArt @colourbill-ctrl @maxderhak
+
+# Tool source ownership
+Tools/CmdLine/IccProfileVisualize/**/*.cpp @ChrisCoxArt
+Tools/CmdLine/IccProfileVisualize/**/*.h @ChrisCoxArt
+Tools/Winnt/IccIisIsapi/**/*.cpp @xsscx
+Tools/Winnt/IccIisIsapi/**/*.h @xsscx
