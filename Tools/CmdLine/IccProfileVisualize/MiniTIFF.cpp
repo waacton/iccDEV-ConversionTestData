@@ -66,12 +66,36 @@
 #include <vector>
 #include <cmath>
 #include <memory>
+#include <limits>
 #if !defined(_WIN32)
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
 #include "MiniTIFF.hpp"
+
+/******************************************************************************/
+
+static
+FILE* icOpenWriteBinaryFile(const char* szFname)
+{
+  if (!szFname || !szFname[0])
+    return stdout;
+
+#if defined(_WIN32)
+  return fopen(szFname, "wb");
+#else
+  int fd = open(szFname, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+  if (fd < 0)
+    return nullptr;
+
+  FILE* f = fdopen(fd, "wb");
+  if (!f)
+    close(fd);
+
+  return f;
+#endif
+}
 
 /******************************************************************************/
 
@@ -195,29 +219,6 @@ bool putIFDLong( uint16_t tag, uint16_t type, uint32_t count, uint32_t value, FI
 
 /******************************************************************************/
 
-static
-FILE* icOpenWriteBinaryFile(const char* szFname)
-{
-  if (!szFname || !szFname[0])
-    return stdout;
-
-#if defined(_WIN32)
-  return fopen(szFname, "wb");
-#else
-  int fd = open(szFname, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-  if (fd < 0)
-    return nullptr;
-
-  FILE* f = fdopen(fd, "wb");
-  if (!f)
-    close(fd);
-
-  return f;
-#endif
-}
-
-/******************************************************************************/
-
 /// Write the image buffer to a TIFF (.tif) file
 bool WriteTIFF( const std::string &name, float dpi, int color_model, uint8_t *buffer,
         size_t width, size_t height, int channels, int depth )
@@ -319,7 +320,11 @@ bool WriteTIFF( const std::string &name, float dpi, int color_model, uint8_t *bu
     writeFailed |= putIFDLong( TIFF_STRIPBYTECOUNTS, TIFF_LONG, 1, 0, outfile );
 
   uint32_t resDenom32 = 1000;
+  if ((dpi * resDenom32) > (float) std::numeric_limits<uint32_t>::max()) {
+        dpi = 96.0f;
+  }
   uint32_t resRatio32 = (uint32_t)(dpi * resDenom32);
+  
   writeFailed |= putIFDLong( TIFF_XRESOLUTION, TIFF_RATIO, 1, xres_offset, outfile );
   writeFailed |= putIFDLong( TIFF_YRESOLUTION, TIFF_RATIO, 1, yres_offset, outfile );
   writeFailed |= putIFDLong( TIFF_PLANARCONFIG, TIFF_LONG, 1, 1, outfile );

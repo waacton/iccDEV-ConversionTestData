@@ -77,6 +77,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <algorithm>
+#include <new>
 #include "IccTag.h"
 #include "IccUtil.h"
 #include "IccProfile.h"
@@ -479,7 +480,9 @@ bool CIccTagUnknown::Read(icUInt32Number size, CIccIO *pIO)
 
   if (m_nSize > 0) { // size could be stored as smaller than expected value, therefore the size check
 
-    m_pData = new icUInt8Number[m_nSize];
+    m_pData = new (std::nothrow) icUInt8Number[m_nSize];
+    if (!m_pData)
+      return false;
 
     if (pIO->Read8(m_pData, m_nSize) != m_nSize) {
       return false;
@@ -876,7 +879,7 @@ icValidateStatus CIccTagText::Validate(std::string sigPath, std::string &sReport
       rv = icMaxStatus(rv, icValidateWarning);
     }
     int i;
-    for (i=0; m_szText[i] && i<(int)m_nBufSize; i++) {
+    for (i=0; i<(int)m_nBufSize && m_szText[i]; i++) {
       if (m_szText[i]&0x80) {
         sReport += icMsgValidateWarning;
         sReport += sSigPathName;
@@ -3392,7 +3395,7 @@ bool CIccTagNamedColor2::InitFindCachedPCSColor()
   icFloatNumber *pXYZ, *pLab;
 
   if (!m_NamedLab) {
-    m_NamedLab = new SIccNamedLabEntry[m_nSize];
+    m_NamedLab = new (std::nothrow) SIccNamedLabEntry[m_nSize];
     if (!m_NamedLab)
       return false;
 
@@ -5803,8 +5806,10 @@ template <class T, icTagTypeSignature Tsig>
 bool CIccTagFixedNum<T, Tsig>::Interpolate(icFloatNumber *DstVector, icFloatNumber pos,
                                            icUInt32Number nVectorSize, icFloatNumber *zeroVals) const
 {
-  icUInt32Number nVector = m_nSize / nVectorSize;
+  if (nVectorSize == 0 || m_nSize == 0)
+    return false;
 
+  icUInt32Number nVector = m_nSize / nVectorSize;
   if (!nVector)
     return false;
 
@@ -6382,8 +6387,10 @@ template <class T, icTagTypeSignature Tsig>
 bool CIccTagNum<T, Tsig>::Interpolate(icFloatNumber *DstVector, icFloatNumber pos,
                                       icUInt32Number nVectorSize, icFloatNumber *zeroVals) const
 {
-  icUInt32Number nVector = m_nSize / nVectorSize;
+  if (nVectorSize == 0 || m_nSize == 0)
+    return false;
 
+  icUInt32Number nVector = m_nSize / nVectorSize;
   if (!nVector)
     return false;
 
@@ -6965,8 +6972,10 @@ template <class T, icTagTypeSignature Tsig>
 bool CIccTagFloatNum<T, Tsig>::Interpolate(icFloatNumber *DstVector, icFloatNumber pos,
                                       icUInt32Number nVectorSize, icFloatNumber *zeroVals) const
 {
-  icUInt32Number nVector = m_nSize / nVectorSize;
+  if (nVectorSize == 0 || m_nSize == 0)
+    return false;
 
+  icUInt32Number nVector = m_nSize / nVectorSize;
   if (!nVector)
     return false;
 
@@ -9012,7 +9021,7 @@ void CIccTagColorantOrder::Describe(std::string &sDescription, int /* nVerbosene
   sDescription += buf;
   sDescription += "Order of Colorants:\n";
   
-  for (int i=0; i<(int)m_nCount; i++) {
+  for (icUInt32Number i=0; i<m_nCount; i++) {
     snprintf(buf, bufSize, "%u\n", (unsigned int) m_pData[i]);
     sDescription += buf;
   }
@@ -10446,7 +10455,9 @@ bool CIccResponseCurveStruct::Read(icUInt32Number size, CIccIO *pIO)
   if (!pIO->Read32(&m_measurementUnitSig))
     return false;
 
-  icUInt32Number* nMeasurements = new icUInt32Number[m_nChannels];
+  icUInt32Number* nMeasurements = new (std::nothrow) icUInt32Number[m_nChannels];
+  if (!nMeasurements)
+    return false;
 
   if (pIO->Read32(&nMeasurements[0],m_nChannels) != m_nChannels) {
     delete[] nMeasurements;
@@ -10511,7 +10522,10 @@ bool CIccResponseCurveStruct::Write(CIccIO *pIO)
 
   if (m_nChannels) {
 
-    icUInt32Number* nMeasurements = new icUInt32Number[m_nChannels];
+    icUInt32Number* nMeasurements = new (std::nothrow) icUInt32Number[m_nChannels];
+    if (!nMeasurements)
+      return false;
+    
     for (int i=0; i<m_nChannels; i++)
       nMeasurements[i] = (icUInt32Number)m_Response16ListArray[i].size();
 
@@ -10768,7 +10782,9 @@ bool CIccTagResponseCurveSet16::Read(icUInt32Number size, CIccIO *pIO)
   if ((icUInt32Number)nCountMeasmntTypes * sizeof(icUInt32Number) > size - headerSize)
     return false;
 
-  icUInt32Number* nOffset = new icUInt32Number[nCountMeasmntTypes];
+  icUInt32Number* nOffset = new (std::nothrow) icUInt32Number[nCountMeasmntTypes];
+  if (!nOffset)
+    return false;
 
   if (pIO->Read32(&nOffset[0], nCountMeasmntTypes) != nCountMeasmntTypes) {
     delete[] nOffset;
@@ -10834,8 +10850,9 @@ bool CIccTagResponseCurveSet16::Write(CIccIO *pIO)
     return false;
 
   size_t offsetPos = pIO->GetLength();
-  icUInt32Number* nOffset = new icUInt32Number[nCountMeasmntTypes];
-
+  icUInt32Number* nOffset = new (std::nothrow) icUInt32Number[nCountMeasmntTypes];
+  if (!nOffset)
+    return false;
 
   int j;
   for (j=0; j<nCountMeasmntTypes; j++) {
@@ -11390,7 +11407,7 @@ CIccTagSpectralViewingConditions::CIccTagSpectralViewingConditions(const CIccTag
   m_observerRange = SVCT.m_observerRange;
 
   if (SVCT.m_observer && SVCT.m_observerRange.steps) {
-    m_observer = new icFloat32Number[SVCT.m_observerRange.steps*3];
+    m_observer = new (std::nothrow) icFloat32Number[SVCT.m_observerRange.steps*3];
     if (m_observer) {
       memcpy(m_observer, SVCT.m_observer, SVCT.m_observerRange.steps*3*sizeof(icFloat32Number));
     }
@@ -11403,7 +11420,7 @@ CIccTagSpectralViewingConditions::CIccTagSpectralViewingConditions(const CIccTag
   m_colorTemperature = SVCT.m_colorTemperature;
 
   if (SVCT.m_illuminant && SVCT.m_illuminantRange.steps) {
-    m_illuminant = new icFloat32Number[SVCT.m_illuminantRange.steps];
+    m_illuminant = new (std::nothrow) icFloat32Number[SVCT.m_illuminantRange.steps];
     if (m_illuminant) {
       memcpy(m_illuminant, SVCT.m_illuminant, SVCT.m_illuminantRange.steps*sizeof(icFloat32Number));
     }
@@ -11434,7 +11451,7 @@ CIccTagSpectralViewingConditions &CIccTagSpectralViewingConditions::operator=(co
   m_observerRange = SVCT.m_observerRange;
 
   if (SVCT.m_observer && SVCT.m_observerRange.steps) {
-    m_observer = new icFloat32Number[SVCT.m_observerRange.steps*3];
+    m_observer = new (std::nothrow) icFloat32Number[SVCT.m_observerRange.steps*3];
     if (m_observer) {
       memcpy(m_observer, SVCT.m_observer, SVCT.m_observerRange.steps*3*sizeof(icFloat32Number));
     }
@@ -11447,7 +11464,7 @@ CIccTagSpectralViewingConditions &CIccTagSpectralViewingConditions::operator=(co
   m_colorTemperature = SVCT.m_colorTemperature;
 
   if (SVCT.m_illuminant && SVCT.m_illuminantRange.steps) {
-    m_illuminant = new icFloat32Number[SVCT.m_illuminantRange.steps];
+    m_illuminant = new (std::nothrow) icFloat32Number[SVCT.m_illuminantRange.steps];
     if (m_illuminant) {
       memcpy(m_illuminant, SVCT.m_illuminant, SVCT.m_illuminantRange.steps*sizeof(icFloat32Number));
     }
@@ -11539,7 +11556,7 @@ bool CIccTagSpectralViewingConditions::Read(icUInt32Number size, CIccIO *pIO)
     if (headerSize + observerSize > size)
       return false;
     
-    m_observer = new icFloat32Number[vals];
+    m_observer = new (std::nothrow) icFloat32Number[vals];
     if (!m_observer)
       return false;
 
@@ -11575,7 +11592,7 @@ bool CIccTagSpectralViewingConditions::Read(icUInt32Number size, CIccIO *pIO)
     if (headerSize + observerSize + illumInfoSize + illuminantSize > size)
       return false;
 
-    m_illuminant = new icFloat32Number[vals];
+    m_illuminant = new (std::nothrow) icFloat32Number[vals];
     if (!m_illuminant)
       return false;
 
@@ -11939,7 +11956,7 @@ bool CIccTagSpectralViewingConditions::setIlluminant(icIlluminant illumId, const
 
   if (illumRange.steps && illum) {
     icUInt32Number size = illumRange.steps;
-    m_illuminant = new icFloatNumber[size]; // Replaced malloc with new[]
+    m_illuminant = new (std::nothrow) icFloatNumber[size];
     if (m_illuminant)
       memcpy(m_illuminant, illum, size * sizeof(icFloatNumber)); // Retained memcpy
     else {
@@ -12099,7 +12116,7 @@ bool CIccTagSpectralViewingConditions::setObserver(icStandardObserver observerId
 
   if (observerRange.steps && observer) {
     icUInt32Number size = observerRange.steps * 3;
-    m_observer = new icFloatNumber[size];
+    m_observer = new (std::nothrow) icFloatNumber[size];
     if (m_observer)
       memcpy(m_observer, observer, size*sizeof(icFloatNumber));
     else {

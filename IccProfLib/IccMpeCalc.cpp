@@ -76,6 +76,7 @@
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
+#include <new>
 #include "IccMpeBasic.h"
 #include "IccMpeCalc.h"
 #include "IccIO.h"
@@ -447,7 +448,10 @@ public:
       return false;
 
     if (n && t) {
-      OsExtendArgs(n*t);
+      size_t ntSize = (size_t)n * (size_t)t;
+      if (ntSize > size_t(icMaxDataStackSize))
+        return false;
+      OsExtendArgs(ntSize);
 
       icFloatNumber *to = &(*os.pStack)[stackSize];
       icFloatNumber *from = to-n;
@@ -3981,7 +3985,7 @@ icValidateStatus CIccCalculatorFunc::Validate(std::string sigPath, std::string &
     rv = icValidateWarning;
   }
 
-  if (GetMaxTemp()>65535) {
+  if (GetMaxTemp()>icMaxDataStackSize) {
     sReport += icMsgValidateCriticalError;
     sReport += sSigPathName;
     sReport += " accesses illegal temporary channels.\n";
@@ -4896,7 +4900,7 @@ bool CIccMpeCalculator::Read(icUInt32Number size, CIccIO *pIO)
     }
   }  
 
-  m_calcFunc = new CIccCalculatorFunc(this);
+  m_calcFunc = new (std::nothrow) CIccCalculatorFunc(this);
   pos = posvals;
   
   // overreading, references into the header, or not having a calc func would be bad
@@ -5069,7 +5073,7 @@ CIccApplyMpe *CIccMpeCalculator::GetNewApply(CIccApplyTagMpe *pApplyTag)
 {
   //CIccApplyTagMpe *pApplyTagEx = (CIccApplyTagMpe*)pApplyTag;
 
-  CIccApplyMpeCalculator *pApply = new CIccApplyMpeCalculator(this);
+  CIccApplyMpeCalculator *pApply = new (std::nothrow) CIccApplyMpeCalculator(this);
 
   if (!pApply)
     return NULL;

@@ -76,6 +76,11 @@
 #include "IccProfLibVer.h"
 #include "IccApplyBPC.h"
 #include "TiffImg.h"
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 typedef struct {
   unsigned long nId;
@@ -181,6 +186,29 @@ void DumpProfileInfo(CIccProfile* pProfile, std::string prefix)
 
 //===================================================
 
+static
+FILE* icOpenWriteBinaryFile(const char* szFname)
+{
+  if (!szFname || !szFname[0])
+    return stdout;
+
+#if defined(_WIN32)
+  return fopen(szFname, "wb");
+#else
+  int fd = open(szFname, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+  if (fd < 0)
+    return nullptr;
+
+  FILE* f = fdopen(fd, "wb");
+  if (!f)
+    close(fd);
+
+  return f;
+#endif
+}
+
+//===================================================
+
 int main(int argc, icChar* argv[])
 {
   int minargs = 1;
@@ -218,11 +246,14 @@ int main(int argc, icChar* argv[])
 
     // Optional profile export
     if (argc > 2 && pProfMem && nLen > 0) {
-      FILE *fp = fopen(argv[2], "wb");
+      FILE *fp = icOpenWriteBinaryFile(argv[2]);
       if (fp) {
-        fwrite(pProfMem, 1, nLen, fp);
-        fclose(fp);
-        printf("ICC profile saved to: %s\n", argv[2]);
+        bool failed = (fwrite(pProfMem, 1, nLen, fp) != nLen);
+        (void)fclose(fp);   // errors don't matter at this point
+        if (failed)
+          fprintf(stderr, "Failed to write ICC profile to %s\n", argv[2]);
+        else
+          printf("ICC profile saved to: %s\n", argv[2]);
       } else {
         fprintf(stderr, "Failed to write ICC profile to %s\n", argv[2]);
       }
