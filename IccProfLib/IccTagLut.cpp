@@ -152,8 +152,11 @@ CIccTagCurve::CIccTagCurve(int nSize/*=0*/)
   m_nMaxIndex = 0;
   m_Curve = NULL;
   
-  if (m_nSize > 0)
+  if (m_nSize > 0) {
     m_Curve = (icFloatNumber*)calloc(nSize, sizeof(icFloatNumber));
+    if (!m_Curve)
+      m_nSize = 0;
+  }
 }
 
 
@@ -175,7 +178,10 @@ CIccTagCurve::CIccTagCurve(const CIccTagCurve &ITCurve)
   
   if (m_nSize > 0) {
     m_Curve = (icFloatNumber*)calloc(m_nSize, sizeof(icFloatNumber));
-    memcpy(m_Curve, ITCurve.m_Curve, m_nSize*sizeof(icFloatNumber));
+    if (m_Curve)
+      memcpy(m_Curve, ITCurve.m_Curve, m_nSize*sizeof(icFloatNumber));
+    else
+      m_nSize = 0;
   }
 }
 
@@ -198,13 +204,15 @@ CIccTagCurve &CIccTagCurve::operator=(const CIccTagCurve &CurveTag)
   m_nSize = CurveTag.m_nSize;
   m_nMaxIndex = CurveTag.m_nMaxIndex;
 
-  if (m_Curve)
-    free(m_Curve);
+  free(m_Curve);
   m_Curve = NULL;
   
   if (m_nSize > 0) {
     m_Curve = (icFloatNumber*)calloc(m_nSize, sizeof(icFloatNumber));
-    memcpy(m_Curve, CurveTag.m_Curve, m_nSize*sizeof(icFloatNumber));
+    if (m_Curve)
+      memcpy(m_Curve, CurveTag.m_Curve, m_nSize*sizeof(icFloatNumber));
+    else
+      m_nSize = 0;
   }
 
   return *this;
@@ -221,8 +229,7 @@ CIccTagCurve &CIccTagCurve::operator=(const CIccTagCurve &CurveTag)
 */
 CIccTagCurve::~CIccTagCurve()
 {
-  if (m_Curve)
-    free(m_Curve);
+  free(m_Curve);
 }
 
 
@@ -421,7 +428,7 @@ void CIccTagCurve::DumpLut(std::string &sDescription, const icChar *szName,
       for (i=0; i<(int)m_nSize; i++) {
         ptr = buf;
 
-        icFloatNumber fraction = (m_nSize > 1) ? ((icFloatNumber)i/(m_nSize-1)) : 1.0f;
+        icFloatNumber fraction = (icFloatNumber)i/(m_nSize-1);
         icColorValue(buf, bufSize, fraction, csSig, nIndex);
         ptr += strlen(buf);
 
@@ -458,11 +465,10 @@ bool CIccTagCurve::SetSize(icUInt32Number nSize, icTagCurveSizeInit nSizeOpt/*=i
   if (nSize==m_nSize)
     return true;
 
-  if (!nSize) {
-    if (m_Curve) {
-      free(m_Curve);
-      m_Curve = NULL;
-    }
+  // set upper limit of 65536 table entries, to help catch errors
+  if (!nSize || nSize > 65536) {
+    free(m_Curve);
+    m_Curve = NULL;
     m_nSize = 0;
     return true;
   }
@@ -1691,14 +1697,10 @@ CIccApplyCLUT::CIccApplyCLUT()
 */
 CIccApplyCLUT::~CIccApplyCLUT()
 {
-  if (m_df)
-    free(m_df);
-  if (m_s)
-    free(m_s);
-  if (m_g)
-    free(m_g);
-  if (m_ig)
-    free(m_ig);
+  free(m_df);
+  free(m_s);
+  free(m_g);
+  free(m_ig);
 }
 
 
@@ -5461,7 +5463,7 @@ bool CIccTagLut16::Read(icUInt32Number size, CIccIO *pIO)
     if (!pCurve->SetSize(nInputEntries))
       return false;
 
-    if ((nInputEntries > 0) && pIO->ReadUInt16Float(&(*pCurve)[0], nInputEntries) != nInputEntries)
+    if (pIO->ReadUInt16Float(&(*pCurve)[0], nInputEntries) != nInputEntries)
       return false;
   }
 
@@ -5493,7 +5495,7 @@ bool CIccTagLut16::Read(icUInt32Number size, CIccIO *pIO)
     if (!pCurve->SetSize(nOutputEntries))
       return false;
 
-    if ((nOutputEntries > 0) && pIO->ReadUInt16Float(&(*pCurve)[0], nOutputEntries) != nOutputEntries)
+    if (pIO->ReadUInt16Float(&(*pCurve)[0], nOutputEntries) != nOutputEntries)
       return false;
   }
   return true;
@@ -6022,7 +6024,13 @@ bool CIccTagGamutBoundaryDesc::Read(icUInt32Number size, CIccIO *pIO)
     delete [] m_Triangles;
 
   size_t pcsSize = (size_t)m_nPCSChannels * (size_t)m_NumberOfVertices;
+  if (pcsSize > (size_t)UINT32_MAX)
+    return false;
+
   size_t deviceSize = (size_t)m_nDeviceChannels * (size_t)m_NumberOfVertices;
+  if (deviceSize > (size_t)UINT32_MAX)
+    return false;
+
   m_PCSValues = new (std::nothrow) icFloatNumber[pcsSize];
 
   if (!m_PCSValues)
@@ -6052,9 +6060,6 @@ bool CIccTagGamutBoundaryDesc::Read(icUInt32Number size, CIccIO *pIO)
   if (pIO->Read32(m_Triangles, nNum32)!=nNum32)
     return false;
 
-  if (pcsSize > (size_t)UINT32_MAX)
-    return false;
-
   nNum32 = (icUInt32Number) pcsSize;
 	
   if (pIO->ReadFloat32Float(m_PCSValues, nNum32)!=nNum32)
@@ -6062,11 +6067,8 @@ bool CIccTagGamutBoundaryDesc::Read(icUInt32Number size, CIccIO *pIO)
 
   if (m_nDeviceChannels > 0)
   {
-    if (pcsSize > (size_t)UINT32_MAX)
-      return false;
-
     nNum32 = (icUInt32Number) deviceSize;
-
+    
     if (pIO->ReadFloat32Float(m_DeviceValues, nNum32)!=nNum32)
       return false;
   }

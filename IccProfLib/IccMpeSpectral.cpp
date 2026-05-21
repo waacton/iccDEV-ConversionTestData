@@ -141,7 +141,8 @@ CIccMpeSpectralMatrix::CIccMpeSpectralMatrix(const CIccMpeSpectralMatrix &matrix
   if(matrix.m_pMatrix) {
     int num = m_size * sizeof(icFloatNumber);
     m_pMatrix = (icFloatNumber*)malloc(num);
-    memcpy(m_pMatrix, matrix.m_pMatrix, num);
+    if (m_pMatrix)
+      memcpy(m_pMatrix, matrix.m_pMatrix, num);
   }
   else
     m_pMatrix = NULL;
@@ -149,7 +150,8 @@ CIccMpeSpectralMatrix::CIccMpeSpectralMatrix(const CIccMpeSpectralMatrix &matrix
   if (matrix.m_pOffset) {
     int num = m_Range.steps * sizeof(icFloatNumber);
     m_pOffset = (icFloatNumber*)malloc(num);
-    memcpy(m_pOffset, matrix.m_pOffset, num);
+    if (m_pOffset)
+      memcpy(m_pOffset, matrix.m_pOffset, num);
   }
   else
     m_pOffset = NULL;
@@ -157,7 +159,8 @@ CIccMpeSpectralMatrix::CIccMpeSpectralMatrix(const CIccMpeSpectralMatrix &matrix
   if (matrix.m_pWhite) {
     int num = m_Range.steps * sizeof(icFloatNumber);
     m_pWhite = (icFloatNumber*)malloc(num);
-    memcpy(m_pWhite, matrix.m_pWhite, num);
+    if (m_pWhite)
+      memcpy(m_pWhite, matrix.m_pWhite, num);
   }
   else
     m_pWhite = NULL;
@@ -185,36 +188,36 @@ void CIccMpeSpectralMatrix::copyData(const CIccMpeSpectralMatrix &matrix)
 
   m_Range = matrix.m_Range;
 
-  if (m_pMatrix)
-    free(m_pMatrix);
+  free(m_pMatrix);
 
   m_size = matrix.m_size;
   if (matrix.m_pMatrix) {
     int num = m_size * sizeof(icFloatNumber);
     m_pMatrix = (icFloatNumber*)malloc(num);
-    memcpy(m_pMatrix, matrix.m_pMatrix, num);
+    if (m_pMatrix)
+      memcpy(m_pMatrix, matrix.m_pMatrix, num);
   }
   else
     m_pMatrix = NULL;
 
-  if (m_pOffset)
-    free(m_pOffset);
+  free(m_pOffset);
 
   if (matrix.m_pOffset) {
     int num = m_Range.steps * sizeof(icFloatNumber);
     m_pOffset = (icFloatNumber*)malloc(num);
-    memcpy(m_pOffset, matrix.m_pOffset, num);
+    if (m_pOffset)
+      memcpy(m_pOffset, matrix.m_pOffset, num);
   }
   else
     m_pOffset = NULL;
 
-  if (m_pWhite)
-    free(m_pWhite);
+  free(m_pWhite);
 
   if (matrix.m_pWhite) {
     int num = m_Range.steps * sizeof(icFloatNumber);
     m_pWhite = (icFloatNumber*)malloc(num);
-    memcpy(m_pWhite, matrix.m_pWhite, num);
+    if (m_pWhite)
+      memcpy(m_pWhite, matrix.m_pWhite, num);
   }
   else
     m_pWhite = NULL;
@@ -234,14 +237,9 @@ void CIccMpeSpectralMatrix::copyData(const CIccMpeSpectralMatrix &matrix)
  ******************************************************************************/
 CIccMpeSpectralMatrix::~CIccMpeSpectralMatrix()
 {
-  if (m_pMatrix)
-    free(m_pMatrix);
-
-  if (m_pOffset)
-    free(m_pOffset);
-
-  if (m_pWhite)
-    free(m_pWhite);
+  free(m_pMatrix);
+  free(m_pOffset);
+  free(m_pWhite);
 
   if (m_pApplyMtx)
     delete m_pApplyMtx;
@@ -260,20 +258,14 @@ CIccMpeSpectralMatrix::~CIccMpeSpectralMatrix()
  ******************************************************************************/
 bool CIccMpeSpectralMatrix::SetSize(icUInt16Number nInputChannels, icUInt16Number nOutputChannels, const icSpectralRange &range)
 {
-  if (m_pMatrix) {
-    free(m_pMatrix);
-    m_pMatrix = NULL;
-  }
+  free(m_pMatrix);
+  m_pMatrix = NULL;
 
-  if (m_pWhite) {
-    free(m_pWhite);
-    m_pWhite = NULL;
-  }
+  free(m_pWhite);
+  m_pWhite = NULL;
 
-  if (m_pOffset) {
-    free(m_pOffset);
-    m_pOffset = NULL;
-  }
+  free(m_pOffset);
+  m_pOffset = NULL;
 
   if (m_pApplyMtx) {
     delete m_pApplyMtx;
@@ -852,7 +844,8 @@ CIccMpeSpectralCLUT::CIccMpeSpectralCLUT(const CIccMpeSpectralCLUT &clut)
 
   if (clut.m_pWhite) {
     m_pWhite = (icFloatNumber *)malloc((int)clut.m_Range.steps*sizeof(icFloatNumber));
-    memcpy(m_pWhite, clut.m_pWhite, clut.m_Range.steps*sizeof(icFloatNumber));
+    if (m_pWhite)
+      memcpy(m_pWhite, clut.m_pWhite, clut.m_Range.steps*sizeof(icFloatNumber));
   }
   else
     m_pWhite = NULL;
@@ -884,8 +877,7 @@ void CIccMpeSpectralCLUT::copyData(const CIccMpeSpectralCLUT &clut)
   if (m_pApplyCLUT)
     delete m_pApplyCLUT;
 
-  if (m_pWhite)
-    free(m_pWhite);
+  free(m_pWhite);
 
   if (clut.m_pCLUT)
     m_pCLUT = new CIccCLUT(*clut.m_pCLUT);
@@ -899,7 +891,8 @@ void CIccMpeSpectralCLUT::copyData(const CIccMpeSpectralCLUT &clut)
 
   if (clut.m_pWhite) {
     m_pWhite = (icFloatNumber *)malloc((int)clut.m_Range.steps*sizeof(icFloatNumber));
-    memcpy(m_pWhite, clut.m_pWhite, clut.m_Range.steps*sizeof(icFloatNumber));
+    if (m_pWhite)
+      memcpy(m_pWhite, clut.m_pWhite, clut.m_Range.steps*sizeof(icFloatNumber));
   }
   else
     m_pWhite = NULL;
@@ -931,8 +924,7 @@ CIccMpeSpectralCLUT::~CIccMpeSpectralCLUT()
   if (m_pApplyCLUT)
     delete m_pApplyCLUT;
 
-  if (m_pWhite)
-    free(m_pWhite);
+  free(m_pWhite);
 
 }
 
@@ -969,8 +961,7 @@ void CIccMpeSpectralCLUT::SetData(CIccCLUT *pCLUT, icUInt16Number nStorageType,
 
   m_Range = range;
 
-  if (m_pWhite)
-    free(m_pWhite);
+  free(m_pWhite);
 
   m_pWhite = pWhite;
 }
@@ -1711,7 +1702,8 @@ CIccMpeSpectralObserver::CIccMpeSpectralObserver(const CIccMpeSpectralObserver &
   if (matrix.m_pWhite) {
     int num = m_Range.steps*sizeof(icFloatNumber);
     m_pWhite = (icFloatNumber*)malloc(num);
-    memcpy(m_pWhite, matrix.m_pWhite, num);
+    if (m_pWhite)
+      memcpy(m_pWhite, matrix.m_pWhite, num);
   }
   else
     m_pWhite = NULL;
@@ -1738,13 +1730,13 @@ void CIccMpeSpectralObserver::copyData(const CIccMpeSpectralObserver &matrix)
 
   m_Range = matrix.m_Range;
 
-  if (m_pWhite)
-    free(m_pWhite);
+  free(m_pWhite);
 
   if (matrix.m_pWhite) {
     int num = m_Range.steps*sizeof(icFloatNumber);
     m_pWhite = (icFloatNumber*)malloc(num);
-    memcpy(m_pWhite, matrix.m_pWhite, num);
+    if (m_pWhite)
+      memcpy(m_pWhite, matrix.m_pWhite, num);
   }
   else
     m_pWhite = NULL;
@@ -1764,8 +1756,7 @@ void CIccMpeSpectralObserver::copyData(const CIccMpeSpectralObserver &matrix)
  ******************************************************************************/
 CIccMpeSpectralObserver::~CIccMpeSpectralObserver()
 {
-  if (m_pWhite)
-    free(m_pWhite);
+  free(m_pWhite);
 
   if (m_pApplyMtx)
     delete m_pApplyMtx;
@@ -1784,10 +1775,8 @@ CIccMpeSpectralObserver::~CIccMpeSpectralObserver()
  ******************************************************************************/
 bool CIccMpeSpectralObserver::SetSize(icUInt16Number nInputChannels, icUInt16Number nOutputChannels, const icSpectralRange &range)
 {
-  if (m_pWhite) {
-    free(m_pWhite);
-    m_pWhite = NULL;
-  }
+  free(m_pWhite);
+  m_pWhite = NULL;
 
   if (m_pApplyMtx) {
     delete m_pApplyMtx;

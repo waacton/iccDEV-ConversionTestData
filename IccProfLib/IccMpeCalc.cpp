@@ -2959,7 +2959,10 @@ CIccCalculatorFunc::CIccCalculatorFunc(const CIccCalculatorFunc &func)
 
   if (m_nOps) {
     m_Op = (SIccCalcOp*)malloc(m_nOps * sizeof(SIccCalcOp));
-    memcpy(m_Op, func.m_Op, m_nOps*sizeof(SIccCalcOp));
+    if (m_Op)
+      memcpy(m_Op, func.m_Op, m_nOps*sizeof(SIccCalcOp));
+    else
+      m_nOps = 0;
   }
   else
     m_Op = NULL;
@@ -2981,14 +2984,16 @@ CIccCalculatorFunc &CIccCalculatorFunc::operator=(const CIccCalculatorFunc &func
 
   m_nReserved= func.m_nReserved;
 
-  if (m_Op)
-    free(m_Op);
+  free(m_Op);
 
   m_nOps = func.m_nOps;
 
   if (m_nOps) {
     m_Op = (SIccCalcOp*)malloc(m_nOps * sizeof(SIccCalcOp));
-    memcpy(m_Op, func.m_Op, m_nOps*sizeof(SIccCalcOp));
+    if (m_Op)
+      memcpy(m_Op, func.m_Op, m_nOps*sizeof(SIccCalcOp));
+    else
+      m_nOps = 0;
   }
   else
     m_Op = NULL;
@@ -3008,9 +3013,7 @@ CIccCalculatorFunc &CIccCalculatorFunc::operator=(const CIccCalculatorFunc &func
  ******************************************************************************/
 CIccCalculatorFunc::~CIccCalculatorFunc()
 {
-  if (m_Op) {
-    free(m_Op);
-  }
+  free(m_Op);
 }
 
 void CIccCalculatorFunc::InsertBlanks(std::string &sDescription, int nBlanks)
@@ -3489,10 +3492,8 @@ icFuncParseStatus CIccCalculatorFunc::SetFunction(const char *szFuncDef, std::st
 ******************************************************************************/
 icFuncParseStatus CIccCalculatorFunc::SetFunction(CIccCalcOpList &opList, std::string &sReport)
 {
-  if (m_Op) {
-    free(m_Op);
-    m_Op = NULL;
-  }
+  free(m_Op);
+  m_Op = NULL;
 
   m_nOps = (icUInt32Number)opList.size();
 
@@ -3501,10 +3502,13 @@ icFuncParseStatus CIccCalculatorFunc::SetFunction(CIccCalcOpList &opList, std::s
     int j;
 
     m_Op = (SIccCalcOp*)calloc(m_nOps , sizeof(SIccCalcOp));
-
-    for (i=opList.begin(), j=0; i!= opList.end(); i++, j++) {
-      m_Op[j] = *i;
+    if (m_Op) {
+      for (i=opList.begin(), j=0; i!= opList.end(); i++, j++) {
+        m_Op[j] = *i;
+      }
     }
+    else
+      m_nOps = 0;
   }
   else {
     return icFuncParseEmptyFunction;
@@ -3556,9 +3560,7 @@ bool CIccCalculatorFunc::Read(icUInt32Number size, CIccIO *pIO)
   if ((icUInt64Number)m_nOps * sizeof(icUInt32Number) * 2 > (icUInt64Number)size - headerSize)
     return false;
 
-  if (m_Op) {
-    free(m_Op);
-  }
+  free(m_Op);
 
   if (m_nOps) {
     m_Op = (SIccCalcOp*)calloc(m_nOps, sizeof(SIccCalcOp));
@@ -5377,9 +5379,7 @@ CIccApplyMpeCalculator::~CIccApplyMpeCalculator()
     delete m_scratch;
   }
 
-  if (m_temp) {
-    free(m_temp);
-  }
+  free(m_temp);
 
   icUInt32Number i;
 

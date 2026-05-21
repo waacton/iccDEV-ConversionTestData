@@ -3016,6 +3016,9 @@ bool CIccTagXmlCurve::ParseXml(xmlNode *pNode, icConvertType nType, std::string 
 
           if (szSize && *szSize) {
             icUInt32Number nSize = (icUInt32Number)atol(szSize);
+            if (nSize <= 1)
+              return false;
+            
             SetSize(nSize);
 
             if (m_nSize == nSize) {
@@ -3062,6 +3065,9 @@ bool CIccTagXmlCurve::ParseXml(xmlNode *pNode, icConvertType nType, std::string 
 
           if (szSize && *szSize) {
             icUInt32Number nSize = (icUInt32Number)atol(szSize);
+            if (nSize <= 1)
+              return false;
+            
             SetSize(nSize);
 
             if (m_nSize == nSize) {
@@ -3101,6 +3107,8 @@ bool CIccTagXmlCurve::ParseXml(xmlNode *pNode, icConvertType nType, std::string 
 
           if (szSize && *szSize) {
             icUInt32Number nSize = (icUInt32Number)atol(szSize);
+            if (nSize <= 1)
+              return false;
 
             SetSize(nSize);
 
@@ -4553,8 +4561,11 @@ bool CIccTagXmlDict::ParseXml(xmlNode *pNode, std::string & /*parseStr*/)
         CIccTagMultiLocalizedUnicode *pTag = pDesc->GetNameLocalized();
         if (!pTag) {
           pTag = new (std::nothrow) CIccTagMultiLocalizedUnicode();
-          if (!pTag)
+          if (!pTag) {
+            delete pDesc;
+            ptr.ptr = NULL;
             return false;
+          }
           pDesc->SetNameLocalized(pTag);
         }
 
@@ -4578,8 +4589,11 @@ bool CIccTagXmlDict::ParseXml(xmlNode *pNode, std::string & /*parseStr*/)
         CIccTagMultiLocalizedUnicode *pTag = pDesc->GetValueLocalized();
         if (!pTag) {
           pTag = new (std::nothrow) CIccTagMultiLocalizedUnicode();
-          if (!pTag)
+          if (!pTag) {
+            delete pDesc;
+            ptr.ptr = NULL;
             return false;
+          }
           pDesc->SetValueLocalized(pTag);
         }
 
