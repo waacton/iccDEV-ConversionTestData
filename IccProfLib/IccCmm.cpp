@@ -1524,6 +1524,13 @@ icStatusCMM CIccXform::Begin()
     m_pAdjustPCS = NULL;
   }
 
+  if (m_bAdjustPCS) {
+    if ((m_bInput && GetNumDstSamples() < 3) ||
+        (!m_bInput && GetNumSrcSamples() < 3)) {
+      return icCmmStatInvalidProfile;
+    }
+  }
+
   return icCmmStatOk;
 }
 
