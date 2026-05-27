@@ -3563,6 +3563,11 @@ bool CIccCalculatorFunc::Read(icUInt32Number size, CIccIO *pIO)
   if (!pIO->Read32(&m_nOps))
     return false;
 
+  // Prevent excessive allocation and overflows - limit to 65536 elements (reasonable max)
+  const icUInt32Number MAX_CALC_ELEMENTS = 65536;
+  if (m_nOps >= MAX_CALC_ELEMENTS)
+    return false;
+
   if ((icUInt64Number)m_nOps * sizeof(icUInt32Number) * 2 > (icUInt64Number)size - headerSize)
     return false;
 
@@ -4703,10 +4708,9 @@ CIccMpeCalculator::~CIccMpeCalculator()
  ******************************************************************************/
 void CIccMpeCalculator::SetSize(icUInt16Number nInputChannels, icUInt16Number nOutputChannels)
 {
-  if (m_calcFunc) {
-    delete m_calcFunc;
-    m_calcFunc = NULL;
-  }
+  delete m_calcFunc;
+  m_calcFunc = NULL;
+
   icUInt32Number i;
 
   if (m_SubElem) {
@@ -4737,9 +4741,8 @@ void CIccMpeCalculator::SetSize(icUInt16Number nInputChannels, icUInt16Number nO
  ******************************************************************************/
 icFuncParseStatus CIccMpeCalculator::SetCalcFunc(icCalculatorFuncPtr newChannelFunc) 
 {
-  if (m_calcFunc) {
-    delete m_calcFunc;
-  }
+  delete m_calcFunc;
+ 
   m_calcFunc = newChannelFunc;
   
   return icFuncParseNoError;
@@ -4757,11 +4760,8 @@ icFuncParseStatus CIccMpeCalculator::SetCalcFunc(icCalculatorFuncPtr newChannelF
 ******************************************************************************/
 icFuncParseStatus CIccMpeCalculator::SetCalcFunc(const char *szFuncDef, std::string &sReport)
 {
-
-  if (m_calcFunc) {
-    delete m_calcFunc;
-    m_calcFunc = NULL;
-  }
+  delete m_calcFunc;
+  m_calcFunc = NULL;
 
   CIccCalculatorFunc *pFunc = new CIccCalculatorFunc(this);
   icFuncParseStatus rv = pFunc->SetFunction(szFuncDef, sReport);
@@ -5399,21 +5399,15 @@ CIccApplyMpeCalculator::CIccApplyMpeCalculator(CIccMultiProcessElement *pElem) :
 ******************************************************************************/
 CIccApplyMpeCalculator::~CIccApplyMpeCalculator()
 {
-  if (m_stack) {
-    delete m_stack;
-  }
-  if (m_scratch) {
-    delete m_scratch;
-  }
-
+  delete m_stack;
+  delete m_scratch;
   free(m_temp);
 
   icUInt32Number i;
 
   if (m_SubElem) {
     for (i=0; i<m_nSubElem; i++) {
-      if (m_SubElem[i])
-        delete m_SubElem[i];
+      delete m_SubElem[i];
     }
   }
 }

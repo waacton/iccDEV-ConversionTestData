@@ -196,7 +196,8 @@ bool CIccTagJsonUnknown::ParseJson(const IccJson &j, std::string & /*parseStr*/)
   if (jGetString(j, "unknownData", hex)) {
     m_nSize = icJsonGetHexDataSize(hex.c_str());
     if (m_nSize > kMaxUnknownTagBytes) return false;
-    if (m_pData) { delete[] m_pData; m_pData = NULL; }
+    delete[] m_pData;
+    m_pData = NULL;
     if (m_nSize) {
       m_pData = new(std::nothrow) icUInt8Number[m_nSize];
       if (!m_pData) { m_nSize = 0; return false; }
@@ -568,14 +569,24 @@ bool CIccTagJsonSpectralDataInfo::ParseJson(const IccJson &j, std::string & /*pa
     jsonToArray(j["spectralRange"], r, 3);
     m_spectralRange.start = icFtoF16((icFloat32Number)r[0]);
     m_spectralRange.end   = icFtoF16((icFloat32Number)r[1]);
-    m_spectralRange.steps = (icUInt16Number)r[2];
+    double temp = r[2];
+    if (temp < 0.0)
+      temp = 0.0;
+    if (temp > 65535.0)
+      temp = 65535.0;
+    m_spectralRange.steps = (icUInt16Number)temp;
   }
   if (jsonExistsField(j, "biSpectralRange") && j["biSpectralRange"].is_array() && j["biSpectralRange"].size() >= 3) {
     double r[3] = {0, 0, 0};
     jsonToArray(j["biSpectralRange"], r, 3);
     m_biSpectralRange.start = icFtoF16((icFloat32Number)r[0]);
     m_biSpectralRange.end   = icFtoF16((icFloat32Number)r[1]);
-    m_biSpectralRange.steps = (icUInt16Number)r[2];
+    double temp = r[2];
+    if (temp < 0.0)
+      temp = 0.0;
+    if (temp > 65535.0)
+      temp = 65535.0;
+    m_biSpectralRange.steps = (icUInt16Number)temp;
   }
   return true;
 }
@@ -678,7 +689,7 @@ bool CIccTagJsonSpectralViewingConditions::ParseJson(const IccJson &j, std::stri
         parseStr += "ObserverFuncs data size mismatch\n";
         return false;
       }
-      if (m_observer) { delete[] m_observer; }
+      delete[] m_observer;
       m_observer = new(std::nothrow) icFloatNumber[nExpected];
       if (!m_observer) { parseStr += "Allocation failed for observer\n"; return false; }
       for (icUInt32Number i = 0; i < nExpected; i++) {
@@ -728,7 +739,7 @@ bool CIccTagJsonSpectralViewingConditions::ParseJson(const IccJson &j, std::stri
         parseStr += "IlluminantSPD data size mismatch\n";
         return false;
       }
-      if (m_illuminant) { delete[] m_illuminant; }
+      delete[] m_illuminant;
       m_illuminant = new(std::nothrow) icFloatNumber[steps];
       if (!m_illuminant) { parseStr += "Allocation failed for illuminant\n"; return false; }
       for (int i = 0; i < steps; i++) {
@@ -1668,10 +1679,10 @@ bool CIccTagJsonCurve::ToJson(IccJson &j, icConvertType nType)
       for (icUInt32Number i = 0; i < m_nSize; i++) {
         switch (nType) {
           case icConvert8Bit:
-            arr.push_back((int)(m_Curve[i] * 255.0f + 0.5f)); break;
+            arr.push_back(icFtoU8(m_Curve[i])); break;
           case icConvert16Bit:
           case icConvertVariable:
-            arr.push_back((int)(m_Curve[i] * 65535.0f + 0.5f)); break;
+            arr.push_back(icFtoU16(m_Curve[i])); break;
           default:
             arr.push_back((double)m_Curve[i]); break;
         }
@@ -3022,7 +3033,7 @@ bool CIccTagJsonGamutBoundaryDesc::ParseJson(const IccJson &j, std::string &pars
     parseStr += "Must have at least 4 PCSValues vertices\n";
     return false;
   }
-  if (m_PCSValues) { delete[] m_PCSValues; }
+  delete[] m_PCSValues;
   icUInt64Number nPCSAlloc = (icUInt64Number)m_NumberOfVertices * m_nPCSChannels;
   if (nPCSAlloc > 0x7FFFFFFF) { parseStr += "PCSValues allocation overflow\n"; return false; }
   m_PCSValues = new(std::nothrow) icFloatNumber[(size_t)nPCSAlloc];
@@ -3064,7 +3075,7 @@ bool CIccTagJsonGamutBoundaryDesc::ParseJson(const IccJson &j, std::string &pars
       parseStr += "Number of Device vertices doesn't match PCS vertices\n";
       return false;
     }
-    if (m_DeviceValues) { delete[] m_DeviceValues; }
+    delete[] m_DeviceValues;
     icUInt64Number nDevAlloc = (icUInt64Number)m_NumberOfVertices * m_nDeviceChannels;
     if (nDevAlloc > 0x7FFFFFFF) { parseStr += "DeviceValues allocation overflow\n"; return false; }
     m_DeviceValues = new(std::nothrow) icFloatNumber[(size_t)nDevAlloc];
@@ -3091,7 +3102,7 @@ bool CIccTagJsonGamutBoundaryDesc::ParseJson(const IccJson &j, std::string &pars
     parseStr += "Too many Triangles entries\n";
     return false;
   }
-  if (m_Triangles) { delete[] m_Triangles; }
+  delete[] m_Triangles;
   m_Triangles = new(std::nothrow) icGamutBoundaryTriangle[m_NumberOfTriangles];
   if (!m_Triangles) { parseStr += "Allocation failed for Triangles\n"; return false; }
   for (icInt32Number i = 0; i < m_NumberOfTriangles; i++) {

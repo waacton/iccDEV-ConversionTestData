@@ -1495,6 +1495,9 @@ bool CIccSingleSampledCurve::SetSize(icUInt32Number nCount, bool bZeroAlloc/*=tr
 {
   free(m_pSamples);
   m_pSamples = NULL;
+  
+  if (nCount > 65535)
+    return false;
     
   if (!nCount) {
     m_nCount = nCount;
@@ -1632,6 +1635,9 @@ bool CIccSingleSampledCurve::Read(icUInt32Number size, CIccIO *pIO)
     return false;
 
   if (!pIO->Read32(&m_nCount))
+    return false;
+
+  if (m_nCount > 65535)
     return false;
 
   if (!pIO->ReadFloat32Float(&m_firstEntry))
@@ -2427,8 +2433,7 @@ bool CIccSampledCalculatorCurve::Begin(icElemInterp nInterp, CIccTagMultiProcess
     m_pSamples[i] = dst;
   }
 
-  if (pApply)
-    delete pApply;
+  delete pApply;
 
   switch (m_extensionType) {
   case icClipSingleSampledCurve:
@@ -3244,7 +3249,7 @@ bool CIccMpeCurveSet::SetCurve(int nIndex, icCurveSetCurvePtr newCurve)
       if (i != nIndex && m_curve[i] == m_curve[nIndex])
         break;
 
-    if (i == m_nInputChannels && m_curve[nIndex]) {
+    if (i == m_nInputChannels) {
       delete m_curve[nIndex];
     }
 
@@ -3778,7 +3783,7 @@ bool CIccMpeTintArray::Read(icUInt32Number size, CIccIO *pIO)
   if (!pIO->Read16(&nOutputChannels))
     return false;
 
-  if (nInputChannels != 1 || !nOutputChannels)
+  if (nInputChannels != 1 || nOutputChannels == 0)
     return false;
 
   m_nInputChannels = nInputChannels;
@@ -4300,8 +4305,7 @@ CIccMpeToneMap& CIccMpeToneMap::operator=(const CIccMpeToneMap& toneMap)
   m_nInputChannels = toneMap.m_nInputChannels;
   m_nOutputChannels = toneMap.m_nOutputChannels;
 
-  if (m_pLumCurve)
-    delete m_pLumCurve;
+  delete m_pLumCurve;
 
   if (toneMap.m_pLumCurve)
     m_pLumCurve = toneMap.m_pLumCurve->NewCopy();
@@ -4331,8 +4335,7 @@ CIccMpeToneMap& CIccMpeToneMap::operator=(const CIccMpeToneMap& toneMap)
  ******************************************************************************/
 CIccMpeToneMap::~CIccMpeToneMap()
 {
-  if (m_pLumCurve)
-    delete m_pLumCurve;
+  delete m_pLumCurve;
 
   ClearToneFuncs();
 }
@@ -4388,15 +4391,14 @@ void CIccMpeToneMap::ClearToneFuncs()
   if (m_pToneFuncs) {
 
     if (m_nOutputChannels) {
-      if (m_pToneFuncs[0])
-        delete m_pToneFuncs[0];
+      delete m_pToneFuncs[0];
 
       int j;
       for (int i = 1; i < m_nOutputChannels; i++) {
         for (j = 0; j < i; j++)
           if (m_pToneFuncs[j] == m_pToneFuncs[i])
             break;
-        if (j == i && m_pToneFuncs[i])
+        if (j == i)
           delete m_pToneFuncs[i];
       }
     }
@@ -4421,8 +4423,7 @@ void CIccMpeToneMap::SetLumCurve(CIccCurveSetCurve *pLumCurve)
   if (pLumCurve == m_pLumCurve)
     return;
 
-  if (m_pLumCurve)
-    delete m_pLumCurve;
+  delete m_pLumCurve;
 
   m_pLumCurve = pLumCurve;
 }
@@ -4519,8 +4520,7 @@ void CIccMpeToneMap::Describe(std::string& sDescription, int nVerboseness)
  ******************************************************************************/
 bool CIccMpeToneMap::Read(icUInt32Number size, CIccIO* pIO)
 {
-  if (m_pLumCurve)
-    delete m_pLumCurve;
+  delete m_pLumCurve;
   m_pLumCurve = NULL;
 
   ClearToneFuncs();
@@ -5557,8 +5557,7 @@ CIccMpeCLUT &CIccMpeCLUT::operator=(const CIccMpeCLUT &clut)
   if (&clut == this)
     return *this;
 
-  if (m_pCLUT)
-    delete m_pCLUT;
+  delete m_pCLUT;
 
   if (clut.m_pCLUT)
     m_pCLUT = new CIccCLUT(*clut.m_pCLUT);
@@ -5584,8 +5583,7 @@ CIccMpeCLUT &CIccMpeCLUT::operator=(const CIccMpeCLUT &clut)
  ******************************************************************************/
 CIccMpeCLUT::~CIccMpeCLUT()
 {
-  if (m_pCLUT)
-    delete m_pCLUT;
+  delete m_pCLUT;
 }
 
 /**
@@ -5600,8 +5598,7 @@ CIccMpeCLUT::~CIccMpeCLUT()
  ******************************************************************************/
 void CIccMpeCLUT::SetCLUT(CIccCLUT *pCLUT)
 {
-  if (m_pCLUT)
-    delete m_pCLUT;
+  delete m_pCLUT;
 
   m_pCLUT = pCLUT;
   if (pCLUT) {
@@ -5920,8 +5917,7 @@ CIccApplyMpeCLUT::CIccApplyMpeCLUT(CIccMultiProcessElement* pElem, CIccApplyCLUT
 */
 CIccApplyMpeCLUT::~CIccApplyMpeCLUT()
 {
-  if (m_pApply)
-    delete m_pApply;
+  delete m_pApply;
 }
 
 
@@ -6266,8 +6262,7 @@ CIccMpeCAM::CIccMpeCAM()
 
 CIccMpeCAM::~CIccMpeCAM()
 {
-  if (m_pCAM)
-    delete m_pCAM;
+  delete m_pCAM;
 }
 
 bool CIccMpeCAM::Read(icUInt32Number size, CIccIO *pIO)
@@ -6306,8 +6301,7 @@ bool CIccMpeCAM::Read(icUInt32Number size, CIccIO *pIO)
   if (pIO->ReadFloat32Float(param, 8)!=8)
     return false;
 
-  if (m_pCAM)
-    delete m_pCAM;
+  delete m_pCAM;
 
   m_pCAM = new (std::nothrow) CIccCamConverter;
   if (!m_pCAM)
@@ -6372,8 +6366,7 @@ bool CIccMpeCAM::Begin(icElemInterp /* nInterp */, CIccTagMultiProcessElement * 
 
 void CIccMpeCAM::SetCAM(CIccCamConverter *pCAM)
 {
-  if (m_pCAM)
-    delete m_pCAM;
+  delete m_pCAM;
   m_pCAM = pCAM;
 }
 
@@ -6471,8 +6464,7 @@ CIccMpeJabToXYZ &CIccMpeJabToXYZ::operator=(const CIccMpeJabToXYZ &cam)
     return *this;
 
   if (cam.m_pCAM) {
-    if (m_pCAM)
-      delete m_pCAM;
+    delete m_pCAM;
 
     m_pCAM = new CIccCamConverter();
     icFloatNumber xyz[3];
@@ -6538,8 +6530,7 @@ CIccMpeXYZToJab &CIccMpeXYZToJab::operator=(const CIccMpeXYZToJab &cam)
     return *this;
 
   if (cam.m_pCAM) {
-    if (m_pCAM)
-      delete m_pCAM;
+    delete m_pCAM;
 
     m_pCAM = new CIccCamConverter();
     icFloatNumber xyz[3];

@@ -74,6 +74,7 @@ Copyright:  (c) see ICC Software License
 #include "IccEval.h"
 #include "IccPrmg.h"
 #include "IccProfLibVer.h"
+#include <cmath>
 #include <vector>
 #include <unordered_map>
 #include <algorithm>
@@ -99,14 +100,14 @@ Copyright:  (c) see ICC Software License
 //    #include "mondrian.xpm"
 #endif
 
-#include "bitmaps/new.xpm"
 #include "bitmaps/open.xpm"
-#include "bitmaps/save.xpm"
-#include "bitmaps/copy.xpm"
-#include "bitmaps/cut.xpm"
-#include "bitmaps/paste.xpm"
-#include "bitmaps/print.xpm"
 #include "bitmaps/help.xpm"
+//#include "bitmaps/new.xpm"
+//#include "bitmaps/save.xpm"
+//#include "bitmaps/copy.xpm"
+//#include "bitmaps/cut.xpm"
+//#include "bitmaps/paste.xpm"
+//#include "bitmaps/print.xpm"
 
 
 #include "wxProfileDump.h"
@@ -662,8 +663,7 @@ MyChild::MyChild(wxMDIParentFrame *parent, const wxString& title, CIccProfile *p
 MyChild::~MyChild()
 {
     my_children.DeleteObject(this);
-	if (m_pIcc)
-		delete m_pIcc;
+    delete m_pIcc;
 }
 
 wxSizer *MyChild::CreateSizerWithText(const wxString &labelText, wxStaticText **ppText)
@@ -1071,7 +1071,7 @@ wxString AnalyzeRoundTrip(wxString &profilePath, icRenderingIntent nIntent, bool
 
   report += wxString::Format("   Max L, a, b:   " ICFLOATFMT ", " ICFLOATFMT ", " ICFLOATFMT "\n", eval.maxLab2[0], eval.maxLab2[1], eval.maxLab2[2]);
 
-  if (prmg.m_nTotal) {
+  if (prmg.m_nTotal > 0) {
     report += wxString::Format("\n   PRMG Interoperability - Round Trip Results\n");
     report += wxString::Format(  "   ------------------------------------------------------\n");
 
