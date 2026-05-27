@@ -30,9 +30,12 @@ fi
 FROMXML="$TOOLS_DIR/IccFromXml/iccFromXml"
 DUMP="$TOOLS_DIR/IccDumpProfile/iccDumpProfile"
 APPLYNCM="$TOOLS_DIR/IccApplyNamedCmm/iccApplyNamedCmm"
+ISSUE_1103_CALC_UNDERFLOW_PROFILE="$TESTING_DIR/CalcTest/uio-CIccCalculatorFunc-CheckUnderflowOverflow-IccMpeCalc_cpp-Line4238.icc"
+ISSUE_1103_CALC_UNDERFLOW_SHA256="e482d1defb841192735881d80b4b7ca0540f5b859164153f0be2080ce6167800"
 
-export ASAN_OPTIONS="${ASAN_OPTIONS:-halt_on_error=0,detect_leaks=0}"
-export UBSAN_OPTIONS="${UBSAN_OPTIONS:-halt_on_error=0,print_stacktrace=1}"
+export ASAN_OPTIONS="${ASAN_OPTIONS:-halt_on_error=0:detect_leaks=0}"
+export LSAN_OPTIONS="${LSAN_OPTIONS:-detect_leaks=0}"
+export UBSAN_OPTIONS="${UBSAN_OPTIONS:-halt_on_error=0:print_stacktrace=1}"
 
 PASS=0
 FAIL=0
@@ -205,6 +208,44 @@ run_reject_profile() {
   pass_case "$name"
 }
 
+run_issue_1103_dump_profile_regression() {
+  local name="issue-1103-calculator-window-underflow"
+  local profile="$ISSUE_1103_CALC_UNDERFLOW_PROFILE"
+  local log="$OUTDIR/${name}.log"
+  local digest=""
+  local exit_code=0
+
+  TOTAL=$((TOTAL + 1))
+  rm -f "$log"
+
+  if [ ! -s "$profile" ]; then
+    fail_case "$name" "missing regression profile: $profile"
+    return
+  fi
+
+  digest="$(sha256sum "$profile" | awk '{print $1}')"
+  if [ "$digest" != "$ISSUE_1103_CALC_UNDERFLOW_SHA256" ]; then
+    fail_case "$name" "unexpected regression profile SHA256: $digest"
+    return
+  fi
+
+  exit_code=0
+  timeout 30 "$DUMP" -v 100 "$profile" ALL > "$log" 2>&1 || exit_code=$?
+  if ! check_log "$name" "$log"; then
+    return
+  fi
+  if [ "$exit_code" -eq 124 ]; then
+    fail_case "$name" "iccDumpProfile timed out"
+    return
+  fi
+  if [ "$exit_code" -ge 129 ] && [ "$exit_code" -le 192 ]; then
+    fail_case "$name" "iccDumpProfile crashed with signal $((exit_code - 128))"
+    return
+  fi
+
+  pass_case "$name"
+}
+
 require_tool "$FROMXML" "iccFromXml" || true
 require_tool "$DUMP" "iccDumpProfile" || true
 require_tool "$APPLYNCM" "iccApplyNamedCmm" || true
@@ -220,6 +261,7 @@ if [ "$FAIL" -eq 0 ]; then
   run_reject_profile "calcOverMem_tget.icc"
   run_reject_profile "calcOverMem_tput.icc"
   run_reject_profile "calcOverMem_tsav.icc"
+  run_issue_1103_dump_profile_regression
 fi
 
 echo "Calculator regression tests: $PASS passed, $FAIL failed, $TOTAL total"
