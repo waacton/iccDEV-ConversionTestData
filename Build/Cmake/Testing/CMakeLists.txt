@@ -542,6 +542,17 @@ set_tests_properties(iccdev.json-parser-regressions PROPERTIES
 )
 
 iccdev_add_script_test(
+  iccdev.cam-impact-surround-regression
+  300
+  "iccdev;cam;xml;validation;regression;asan"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-cam-impact-surround-regression.sh"
+)
+set_tests_properties(iccdev.cam-impact-surround-regression PROPERTIES
+  FIXTURES_REQUIRED iccdev_profiles
+)
+
+iccdev_add_script_test(
   iccdev.issue-1079-fromjson-soft-failure
   60
   "iccdev;json;fromjson;issue-1079;regression;asan"
