@@ -187,6 +187,49 @@ cmake --build out/vs2022-x64 --config Release --target check
 See [CTest tool suites](ctest.md) for the registered tests, fixtures, logs, and
 add-test process.
 
+## Instrumentation Builds
+
+Use CMake options instead of hand-written sanitizer flags. Clean the cache when
+changing compiler or instrumentation mode, and use `CC=clang` plus `CXX=clang++`
+for environment compiler selection.
+
+```bash
+# Security repro default: ASan + UBSan + IntSan + float checks, no coverage
+cd Build && rm -rf CMakeCache.txt CMakeFiles && CC=clang CXX=clang++ cmake Cmake -DCMAKE_BUILD_TYPE=Debug -DENABLE_TOOLS=ON -DENABLE_ASAN=ON -DENABLE_UBSAN=ON -DENABLE_INTEGER_SANITIZER=ON -DENABLE_FLOAT_SANITIZER=ON
+make -j"$(nproc)"
+
+# Coverage build; keep separate from sanitizer reproductions
+cd Build && rm -rf CMakeCache.txt CMakeFiles && CC=clang CXX=clang++ cmake Cmake -DCMAKE_BUILD_TYPE=Debug -DENABLE_TOOLS=ON -DENABLE_COVERAGE=ON
+make -j"$(nproc)"
+
+# Profiling build
+cd Build && rm -rf CMakeCache.txt CMakeFiles && CC=clang CXX=clang++ cmake Cmake -DCMAKE_BUILD_TYPE=Debug -DENABLE_TOOLS=ON -DENABLE_PROFILING=ON
+make -j"$(nproc)"
+```
+
+For ThreadSanitizer and MemorySanitizer, use one sanitizer family per build:
+
+```bash
+cd Build && rm -rf CMakeCache.txt CMakeFiles && CC=clang CXX=clang++ cmake Cmake -DCMAKE_BUILD_TYPE=Debug -DENABLE_TOOLS=ON -DENABLE_TSAN=ON
+cd Build && rm -rf CMakeCache.txt CMakeFiles && CC=clang CXX=clang++ cmake Cmake -DCMAKE_BUILD_TYPE=Debug -DENABLE_TOOLS=ON -DENABLE_MSAN=ON
+```
+
+Do not enable coverage while reproducing sanitizer findings; coverage
+instrumentation can change optimizer and sanitizer behavior enough to mask a
+bug. Maintainer-level details live in
+`.github/instructions/build-system.instructions.md`.
+
+Preset equivalents are available for the same modes:
+
+```bash
+cmake --preset linux-clang-sanitizers -S Build/Cmake -B out/linux-clang-sanitizers
+cmake --preset linux-clang-ubsan-int-float -S Build/Cmake -B out/linux-clang-ubsan-int-float
+cmake --preset linux-clang-tsan -S Build/Cmake -B out/linux-clang-tsan
+cmake --preset linux-clang-msan -S Build/Cmake -B out/linux-clang-msan
+cmake --preset linux-clang-coverage -S Build/Cmake -B out/linux-clang-coverage
+cmake --preset linux-clang-profiling -S Build/Cmake -B out/linux-clang-profiling
+```
+
 ## Maintainer Dockerfiles
 
 `Dockerfile*` files are maintainer-owned release and CI infrastructure. General
