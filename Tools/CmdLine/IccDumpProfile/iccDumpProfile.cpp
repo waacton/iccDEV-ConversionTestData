@@ -159,7 +159,7 @@ void DumpTagCore(CIccTag *pTag, icTagSignature sig, int nVerboseness)
       contents = validateReport;
     else
       pTag->Describe(contents, nVerboseness);
-    fwrite(contents.c_str(), contents.length(), 1, stdout);
+    (void)fwrite(contents.c_str(), contents.length(), 1, stdout);
   }
   else {
     printf("Tag (%s) not found in profile\n", icGetSig(buf, bufSize, sig));
@@ -532,7 +532,7 @@ int main(int argc, char* argv[])
             pad = (overlap > (icUInt64Number)INT_MAX) ? INT_MIN : -(int)overlap;
         }
         else
-            pad = closest - i->TagInfo.offset - i->TagInfo.size;
+            pad = (int)(closest - tagEnd);
 
         printf("%28s  %s  %8d\t%8d\t%8d\n", Fmt.GetTagSigName(i->TagInfo.sig),
             icGetSig(buf, bufSize, i->TagInfo.sig, false), (unsigned int) i->TagInfo.offset, (unsigned int) i->TagInfo.size, pad);
@@ -734,7 +734,7 @@ int main(int argc, char* argv[])
   printf("\n\n");
 
   sReport += "\n";
-  fwrite(sReport.c_str(), sReport.length(), 1, stdout);
+  (void)fwrite(sReport.c_str(), sReport.length(), 1, stdout);
 
   delete pIcc;
 
