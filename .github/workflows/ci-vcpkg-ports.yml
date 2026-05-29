@@ -11,19 +11,27 @@
 
 name: ci-vcpkg-ports
 
+# Existing vcpkg verification rows intentionally exceed the default yamllint
+# line length. Keep the disable local to this workflow.
+# yamllint disable rule:line-length
+
 on:
+  workflow_dispatch:
   push:
-    branches: [ master ]
+    branches: [master]
     paths:
       - 'ports/**'
       - '.github/workflows/ci-vcpkg-ports.yml'
   pull_request:
-    branches: [ master ]
+    branches: [master]
     paths:
       - 'ports/**'
       - '.github/workflows/ci-vcpkg-ports.yml'
 permissions:
   contents: read
+
+env:
+  TRUSTED_SCRIPTS: ${{ github.workspace }}/trusted/.github/scripts
 
 concurrency:
   group: "ci-vcpkg-ports-${{ github.workflow }}-${{ github.ref }}"
@@ -39,7 +47,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ windows-2022, ubuntu-24.04, macos-14 ]
+        os: [windows-2022, ubuntu-24.04, macos-14]
 
     steps:
       # Checkout (pinned SHA, no credentials)
@@ -149,6 +157,16 @@ jobs:
             throw "vcpkg install failed with exit code $LASTEXITCODE"
           }
           Write-Host "::endgroup::"
+
+      - name: Refresh trusted sanitizer helpers
+        uses: actions/checkout@c2d88d3ecc89a9ef08eebf45d9637801dcee7eb5  # v5.0.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: trusted
+          sparse-checkout: .github/scripts
+          fetch-depth: 1
+          persist-credentials: false
+
       # Verify installed artifacts
       - name: Verify installed artifacts (Unix)
         if: runner.os != 'Windows'
@@ -161,9 +179,10 @@ jobs:
           git config --global --add safe.directory "$PWD"
           git config --global credential.helper ""
           unset GITHUB_TOKEN || true
-          # Load sanitizers (prefer script, inline fallback for shallow clones)
-          if [ -f .github/scripts/sanitize-sed.sh ]; then
-            source .github/scripts/sanitize-sed.sh
+          # Load sanitizers from trusted base checkout.
+          if [ -f "$TRUSTED_SCRIPTS/sanitize-sed.sh" ]; then
+            # shellcheck disable=SC1090
+            source "$TRUSTED_SCRIPTS/sanitize-sed.sh"
           else
             escape_html() {
               local s="$1"
@@ -223,7 +242,7 @@ jobs:
             echo "| Libraries | $(ls "$PREFIX/lib/"libIccProfLib2* >/dev/null 2>&1 && echo '[OK]' || echo '[FAIL]') |"
             echo "| CMake config | $([ -f "$PREFIX/share/RefIccMAX/RefIccMAXConfig.cmake" ] || [ -f "$PREFIX/share/reficcmax/RefIccMAXConfig.cmake" ] && echo '[OK]' || echo '[FAIL]') |"
             echo "| Tools | $([ -x "$PREFIX/tools/iccdev/iccDumpProfile" ] && echo '[OK]' || echo '[FAIL]') |"
-          } >> "$GITHUB_STEP_SUMMARY"
+          } >> "$GITHUB_STEP_SUMMARY"  # elements-sanitized
           if [ "$errors" -gt 0 ]; then
             echo "::error::$errors verification checks failed"
             exit 1
@@ -241,9 +260,9 @@ jobs:
           git config --global --add safe.directory "$env:GITHUB_WORKSPACE"
           git config --global credential.helper ""
           if (Test-Path env:GITHUB_TOKEN) { Remove-Item env:GITHUB_TOKEN }
-          # Load sanitizer (prefer script, inline fallback for shallow clones)
-          if (Test-Path ".github/scripts/sanitize.ps1") {
-            . .github/scripts/sanitize.ps1
+          # Load sanitizer from trusted base checkout.
+          if (Test-Path "$env:TRUSTED_SCRIPTS\sanitize.ps1") {
+            . "$env:TRUSTED_SCRIPTS\sanitize.ps1"
           } else {
             function Sanitize-Line([string]$s) {
               $s = $s -replace '&','&amp;' -replace '<','&lt;' -replace '>','&gt;' -replace '"','&quot;'
@@ -290,7 +309,7 @@ jobs:
           }
           # Summary
           $os = Sanitize-Line "Windows"
-          @"
+          $summary = @"
           ## vcpkg Port Verification - $os
           | Check | Result |
           |-------|--------|
@@ -298,7 +317,8 @@ jobs:
           | Libraries | $(if (Test-Path "$prefix\lib\IccProfLib2-static.lib") {'[OK]'} else {'[FAIL]'}) |
           | CMake config | $(if ($cmakeFound) {'[OK]'} else {'[FAIL]'}) |
           | Tools | $(if (Test-Path "$prefix\tools\iccdev\iccDumpProfile.exe") {'[OK]'} else {'[FAIL]'}) |
-          "@ >> $env:GITHUB_STEP_SUMMARY
+          "@
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $summary
           if ($errors -gt 0) {
             Write-Error "$errors verification checks failed"
             exit 1
@@ -441,6 +461,16 @@ jobs:
           if (Test-Path env:GITHUB_TOKEN) { Remove-Item env:GITHUB_TOKEN }
           cmake --build "$env:RUNNER_TEMP\manifest-test\build" --config Release
           if ($LASTEXITCODE -ne 0) { throw "Build failed" }
+
+      - name: Refresh trusted sanitizer helpers
+        uses: actions/checkout@c2d88d3ecc89a9ef08eebf45d9637801dcee7eb5  # v5.0.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: trusted
+          sparse-checkout: .github/scripts
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Run test executable
         timeout-minutes: 1
         shell: pwsh -NoProfile -NoLogo -NonInteractive -Command {0}
@@ -453,6 +483,10 @@ jobs:
           git config --global --add safe.directory "$env:GITHUB_WORKSPACE"
           git config --global credential.helper ""
           if (Test-Path env:GITHUB_TOKEN) { Remove-Item env:GITHUB_TOKEN }
+          # Load sanitizer before running the PR-built executable.
+          if (Test-Path "$env:TRUSTED_SCRIPTS\sanitize.ps1") {
+            . "$env:TRUSTED_SCRIPTS\sanitize.ps1"
+          }
           $exe = "$env:RUNNER_TEMP\manifest-test\build\Release\test-iccdev.exe"
           if (-not (Test-Path $exe)) { throw "test-iccdev.exe not found" }
           $output = (& $exe 2>&1) -join "`n"
@@ -461,16 +495,13 @@ jobs:
           if ($output -notmatch "IccProfLib") { throw "Missing IccProfLib version output" }
           if ($output -notmatch "OK") { throw "Missing OK output" }
           Write-Host "[OK] Manifest mode test passed"
-          # Load sanitizer for summary output
-          if (Test-Path ".github/scripts/sanitize.ps1") {
-            . .github/scripts/sanitize.ps1
-          }
           # Summary
-          @"
+          $summary = @"
           ## vcpkg Manifest Mode - Windows
           | Check | Result |
           |-------|--------|
           | CMake configure | [OK] |
           | Build | [OK] |
           | Run | [OK] |
-          "@ >> $env:GITHUB_STEP_SUMMARY
+          "@
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value $summary

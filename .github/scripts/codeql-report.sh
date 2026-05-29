@@ -155,6 +155,10 @@ def main():
             by_component["IccProfLib"] += 1
         elif f.startswith("IccXML/IccLibXML/"):
             by_component["IccLibXML"] += 1
+        elif f.startswith("IccJSON/IccLibJSON/"):
+            by_component["IccLibJSON"] += 1
+        elif f.startswith("IccConnect/IccLibConnect/"):
+            by_component["IccLibConnect"] += 1
         elif f.startswith("IccXML/CmdLine/"):
             by_component["IccXML Tools"] += 1
         elif f.startswith("Tools/CmdLine/"):
@@ -182,6 +186,23 @@ def main():
         print("--- Findings by CWE ---")
         for cwe, count in sorted(by_cwe.items(), key=lambda x: -x[1]):
             print("  {:60s} {:>5d}".format(cwe, count))
+        print()
+
+    # Denominator and divide-by-zero findings deserve their own section because
+    # malformed ICC fields often become derived state before the final division.
+    divzero = [
+        r for r in all_results
+        if r["rule_id"] == "iccdev/division-by-zero-profile" or "CWE-369" in r["cwe"]
+    ]
+    if divzero:
+        print("=" * 72)
+        print("DENOMINATOR / DIVIDE-BY-ZERO FINDINGS")
+        print("=" * 72)
+        for r in sorted(divzero, key=lambda x: (x["file"], x["line"], x["rule_id"])):
+            print()
+            print("  Rule: {}".format(r["rule_id"]))
+            print("  Location: {}".format(r["location"]))
+            print("  {}".format(r["message"][:240]))
         print()
 
     # Detailed error-level findings

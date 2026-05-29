@@ -77,6 +77,8 @@
 #include <vector>
 #include <unordered_map>
 #include <algorithm>
+#include <new>
+#include <limits>
 #include "IccProfile.h"
 #include "IccTag.h"
 #include "IccArrayBasic.h"
@@ -253,7 +255,7 @@ CIccProfile::~CIccProfile()
  */
 void CIccProfile::Cleanup()
 {
-  if (m_pAttachIO && !m_bSharedIO) {
+  if (!m_bSharedIO) {
     delete m_pAttachIO;
   }
   m_pAttachIO = nullptr;
@@ -261,9 +263,7 @@ void CIccProfile::Cleanup()
   TagPtrList::iterator i;
 
   for (i=m_TagVals.begin(); i!=m_TagVals.end(); i++) {
-    if (i->ptr != nullptr) {
-      delete i->ptr;
-    }
+    delete i->ptr;
   }
   m_Tags.clear();
   m_TagVals.clear();
@@ -518,7 +518,7 @@ CIccMemIO* CIccProfile::GetTagIO(icSignature sig)
   IccTagEntry *pEntry = GetTag(sig);
 
   if (pEntry && m_pAttachIO) {
-    CIccMemIO *pIO = new CIccMemIO;
+    CIccMemIO *pIO = new (std::nothrow) CIccMemIO;
 
     if (!pIO)
       return NULL;
@@ -528,7 +528,10 @@ CIccMemIO* CIccProfile::GetTagIO(icSignature sig)
       return NULL;
     }
 
-    m_pAttachIO->Seek(pEntry->TagInfo.offset, icSeekSet);
+    if (m_pAttachIO->Seek(pEntry->TagInfo.offset, icSeekSet) != pEntry->TagInfo.offset) {
+      delete pIO;
+      return NULL;
+    }
     
     const size_t expected_length = pIO->GetLength();
     size_t read_length = m_pAttachIO->Read8(pIO->GetData(), expected_length);
@@ -652,15 +655,21 @@ bool CIccProfile::DeleteTag(icSignature sig)
 */
 CIccIO* CIccProfile::ConnectSubProfile(CIccIO *pIO, bool bOwnIO) const
 {
+  if (!pIO)
+    return NULL;
+
   TagEntryList::const_iterator i;
 
   for (i = m_Tags.begin(); i != m_Tags.end(); i++) {
     if (i->TagInfo.sig == icSigEmbeddedV5ProfileTag && i->TagInfo.size>2*sizeof(icUInt32Number)) {
-      pIO->Seek(i->TagInfo.offset, icSeekSet);
+      if (pIO->Seek(i->TagInfo.offset, icSeekSet) != i->TagInfo.offset)
+        return NULL;
       icTagTypeSignature sig=(icTagTypeSignature)0, extra;
 
       if (pIO->Read32(&sig) && pIO->Read32(&extra) && sig == icSigEmbeddedProfileType) {
-        CIccEmbedIO *pEmbedIO = new CIccEmbedIO();
+        CIccEmbedIO *pEmbedIO = new (std::nothrow) CIccEmbedIO();
+        if (!pEmbedIO)
+          return NULL;
         
         if (pEmbedIO->Attach(pIO, i->TagInfo.size - 2 * sizeof(icUInt32Number), bOwnIO))
           return pEmbedIO;
@@ -820,7 +829,9 @@ bool CIccProfile::ReadTags(CIccProfile* pProfile)
 		return true;
 	}
 
-	size_t pos = pIO->Tell();
+  int64_t pos = pIO->Tell();
+  if (pos < 0)
+    return false;
 
 	for (i=m_Tags.begin(); i!=m_Tags.end(); i++) {
 		if (!LoadTag((IccTagEntry*)&(i->TagInfo), pIO, true)) {
@@ -829,9 +840,7 @@ bool CIccProfile::ReadTags(CIccProfile* pProfile)
 		}
 	}
 
-	pIO->Seek(pos, icSeekSet);
-
-	return true;
+	return pIO->Seek(pos, icSeekSet) >= 0;
 }
 
 /**
@@ -994,43 +1003,47 @@ icValidateStatus CIccProfile::ReadValidate(CIccIO *pIO, std::string &sReport)
  */
 bool CIccProfile::Write(CIccIO *pIO, icProfileIDSaveMethod nWriteId)
 {
-  //Write Header
-  pIO->Seek(0, icSeekSet);
+  if (!pIO)
+    return false;
 
-  pIO->Write32(&m_Header.size);
-  pIO->Write32(&m_Header.cmmId);
-  pIO->Write32(&m_Header.version);
-  pIO->Write32(&m_Header.deviceClass);
-  pIO->Write32(&m_Header.colorSpace);
-  pIO->Write32(&m_Header.pcs);
-  pIO->Write16(&m_Header.date.year);
-  pIO->Write16(&m_Header.date.month);
-  pIO->Write16(&m_Header.date.day);
-  pIO->Write16(&m_Header.date.hours);
-  pIO->Write16(&m_Header.date.minutes);
-  pIO->Write16(&m_Header.date.seconds);
-  pIO->Write32(&m_Header.magic);
-  pIO->Write32(&m_Header.platform);
-  pIO->Write32(&m_Header.flags);
-  pIO->Write32(&m_Header.manufacturer);
-  pIO->Write32(&m_Header.model);
-  pIO->Write64(&m_Header.attributes);
-  pIO->Write32(&m_Header.renderingIntent);
-  pIO->Write32(&m_Header.illuminant.X);
-  pIO->Write32(&m_Header.illuminant.Y);
-  pIO->Write32(&m_Header.illuminant.Z);
-  pIO->Write32(&m_Header.creator);
-  pIO->Write8(&m_Header.profileID, sizeof(m_Header.profileID));
-  pIO->Write32(&m_Header.spectralPCS);
-  pIO->Write16(&m_Header.spectralRange.start);
-  pIO->Write16(&m_Header.spectralRange.end);
-  pIO->Write16(&m_Header.spectralRange.steps);
-  pIO->Write16(&m_Header.biSpectralRange.start);
-  pIO->Write16(&m_Header.biSpectralRange.end);
-  pIO->Write16(&m_Header.biSpectralRange.steps);
-  pIO->Write32(&m_Header.mcs);
-  pIO->Write32(&m_Header.deviceSubClass);
-  pIO->Write8(&m_Header.reserved[0], sizeof(m_Header.reserved));
+  //Write Header
+  if (pIO->Seek(0, icSeekSet)<0 ||
+      !pIO->Write32(&m_Header.size) ||
+      !pIO->Write32(&m_Header.cmmId) ||
+      !pIO->Write32(&m_Header.version) ||
+      !pIO->Write32(&m_Header.deviceClass) ||
+      !pIO->Write32(&m_Header.colorSpace) ||
+      !pIO->Write32(&m_Header.pcs) ||
+      !pIO->Write16(&m_Header.date.year) ||
+      !pIO->Write16(&m_Header.date.month) ||
+      !pIO->Write16(&m_Header.date.day) ||
+      !pIO->Write16(&m_Header.date.hours) ||
+      !pIO->Write16(&m_Header.date.minutes) ||
+      !pIO->Write16(&m_Header.date.seconds) ||
+      !pIO->Write32(&m_Header.magic) ||
+      !pIO->Write32(&m_Header.platform) ||
+      !pIO->Write32(&m_Header.flags) ||
+      !pIO->Write32(&m_Header.manufacturer) ||
+      !pIO->Write32(&m_Header.model) ||
+      !pIO->Write64(&m_Header.attributes) ||
+      !pIO->Write32(&m_Header.renderingIntent) ||
+      !pIO->Write32(&m_Header.illuminant.X) ||
+      !pIO->Write32(&m_Header.illuminant.Y) ||
+      !pIO->Write32(&m_Header.illuminant.Z) ||
+      !pIO->Write32(&m_Header.creator) ||
+      pIO->Write8(&m_Header.profileID, sizeof(m_Header.profileID))!=sizeof(m_Header.profileID) ||
+      !pIO->Write32(&m_Header.spectralPCS) ||
+      !pIO->Write16(&m_Header.spectralRange.start) ||
+      !pIO->Write16(&m_Header.spectralRange.end) ||
+      !pIO->Write16(&m_Header.spectralRange.steps) ||
+      !pIO->Write16(&m_Header.biSpectralRange.start) ||
+      !pIO->Write16(&m_Header.biSpectralRange.end) ||
+      !pIO->Write16(&m_Header.biSpectralRange.steps) ||
+      !pIO->Write32(&m_Header.mcs) ||
+      !pIO->Write32(&m_Header.deviceSubClass) ||
+      pIO->Write8(&m_Header.reserved[0], sizeof(m_Header.reserved))!=sizeof(m_Header.reserved)) {
+    return false;
+  }
 
   TagEntryList::iterator i, j;
   icUInt32Number count;
@@ -1040,9 +1053,12 @@ bool CIccProfile::Write(CIccIO *pIO, icProfileIDSaveMethod nWriteId)
       count++;
   }
 
-  pIO->Write32(&count);
+  if (!pIO->Write32(&count))
+    return false;
 
   size_t dirpos = pIO->GetLength();
+  if (dirpos > (size_t)std::numeric_limits<int64_t>::max())
+    return false;
 
   //Write Unintialized TagDir
   for (i=m_Tags.begin(); i!= m_Tags.end(); i++) {
@@ -1050,9 +1066,10 @@ bool CIccProfile::Write(CIccIO *pIO, icProfileIDSaveMethod nWriteId)
       i->TagInfo.offset = 0;
       i->TagInfo.size = 0;
 
-      pIO->Write32(&i->TagInfo.sig);
-      pIO->Write32(&i->TagInfo.offset);
-      pIO->Write32(&i->TagInfo.size);
+      if (!pIO->Write32(&i->TagInfo.sig) ||
+          !pIO->Write32(&i->TagInfo.offset) ||
+          !pIO->Write32(&i->TagInfo.size))
+        return false;
     }
   }
 
@@ -1065,11 +1082,22 @@ bool CIccProfile::Write(CIccIO *pIO, icProfileIDSaveMethod nWriteId)
       }
 
       if (i==j) {
-        i->TagInfo.offset = (icUInt32Number) pIO->GetLength();
-        i->pTag->Write(pIO);
-        i->TagInfo.size = (icUInt32Number)( pIO->GetLength() - i->TagInfo.offset );
+        size_t tagOffset = pIO->GetLength();
+        if (tagOffset > (size_t)std::numeric_limits<icUInt32Number>::max())
+          return false;
 
-        pIO->Align32();
+        i->TagInfo.offset = (icUInt32Number)tagOffset;
+        if (!i->pTag->Write(pIO))
+          return false;
+
+        size_t tagEnd = pIO->GetLength();
+        if (tagEnd < tagOffset ||
+            tagEnd - tagOffset > (size_t)std::numeric_limits<icUInt32Number>::max())
+          return false;
+        i->TagInfo.size = (icUInt32Number)(tagEnd - tagOffset);
+
+        if (!pIO->Align32())
+          return false;
       }
       else {
         i->TagInfo.offset = j->TagInfo.offset;
@@ -1078,21 +1106,27 @@ bool CIccProfile::Write(CIccIO *pIO, icProfileIDSaveMethod nWriteId)
     }
   }
 
-  pIO->Seek(dirpos, icSeekSet);
+  if (pIO->Seek((int64_t)dirpos, icSeekSet)<0)
+    return false;
 
   //Write TagDir with offsets and sizes
   for (i=m_Tags.begin(); i!= m_Tags.end(); i++) {
     if (i->pTag) {
-      pIO->Write32(&i->TagInfo.sig);
-      pIO->Write32(&i->TagInfo.offset);
-      pIO->Write32(&i->TagInfo.size);
+      if (!pIO->Write32(&i->TagInfo.sig) ||
+          !pIO->Write32(&i->TagInfo.offset) ||
+          !pIO->Write32(&i->TagInfo.size))
+        return false;
     }
   }
 
   //Update header with size
-  m_Header.size = (icUInt32Number) pIO->GetLength();
-  pIO->Seek(0, icSeekSet);
-  pIO->Write32(&m_Header.size);
+  size_t profileSize = pIO->GetLength();
+  if (profileSize > (size_t)std::numeric_limits<icUInt32Number>::max())
+    return false;
+  m_Header.size = (icUInt32Number)profileSize;
+  if (pIO->Seek(0, icSeekSet)<0 ||
+      !pIO->Write32(&m_Header.size))
+    return false;
 
   bool bWriteId;
 
@@ -1114,8 +1148,9 @@ bool CIccProfile::Write(CIccIO *pIO, icProfileIDSaveMethod nWriteId)
   //Write the profile ID if version 4 profile
   if(bWriteId) {
     CalcProfileID(pIO, &m_Header.profileID);
-    pIO->Seek(84, icSeekSet);
-    pIO->Write8(&m_Header.profileID, sizeof(m_Header.profileID));
+    if (pIO->Seek(84, icSeekSet)<0 ||
+        pIO->Write8(&m_Header.profileID, sizeof(m_Header.profileID))!=sizeof(m_Header.profileID))
+      return false;
   }
 
   return true;
@@ -1161,11 +1196,12 @@ void CIccProfile::InitHeader()
   m_Header.colorSpace = (icColorSpaceSignature)0;
   m_Header.pcs = icSigLabData;
   
-  struct tm *newtime;
+  struct tm timeBuf;
+  struct tm *newtime = &timeBuf;
   time_t long_time;
 
   time( &long_time );                /* Get time as long integer. */
-  newtime = gmtime( &long_time ); 
+  newtime = gmtime_r( &long_time, newtime );
 
   m_Header.date.year = newtime->tm_year+1900;
   m_Header.date.month = newtime->tm_mon+1;
@@ -1219,14 +1255,19 @@ bool CIccProfile::ReadBasic(CIccIO *pIO)
   // field + profileID hash before being rejected.
   {
     icInt64Number startPos = pIO->Tell();
+    if (startPos < 0)
+      return false;
+
     icUInt32Number magic = 0;
     if (pIO->Seek(startPos + 36, icSeekSet) < 0 ||
         !pIO->Read32(&magic) ||
         magic != icMagicNumber) {
-      pIO->Seek(startPos, icSeekSet);
+      if (pIO->Seek(startPos, icSeekSet) < 0)
+        return false;
       return false;
     }
-    pIO->Seek(startPos, icSeekSet);
+    if (pIO->Seek(startPos, icSeekSet) < 0)
+      return false;
   }
 
   //Read Header
@@ -1804,7 +1845,7 @@ icValidateStatus CIccProfile::CheckHeader(std::string &sReport, const CIccProfil
 
     if (bInvalidVersionBcd) {
         sReport += icMsgValidateWarning;
-        snprintf(buf, bufSize, "Version number 0x%08X contains non-BCD digit(s).\n", m_Header.version);
+        snprintf(buf, bufSize, "Version number 0x%08X contains non-BCD digit(s).\n", static_cast<unsigned int>(m_Header.version));
         sReport += buf;
         rv = icMaxStatus(rv, icValidateWarning);
     }
@@ -2991,18 +3032,31 @@ icValidateStatus CIccProfile::CheckRequiredTags(std::string &sReport, const CIcc
  */
 bool CIccProfile::CheckFileSize(CIccIO *pIO) const
 {
-  size_t FileSize;
-  size_t curPos = pIO->Tell();
-
-  if (!pIO->Seek(0, icSeekEnd))
+  if (!pIO)
     return false;
 
-  FileSize = pIO->Tell();
+  int64_t curPos = pIO->Tell();
+  if (curPos < 0)
+    return false;
+
+  if (pIO->Seek(0, icSeekEnd) < 0)
+    return false;
+
+  int64_t endPos = pIO->Tell();
+  if (endPos < 0) {
+    pIO->Seek(curPos, icSeekSet);
+    return false;
+  }
+
+  if (pIO->Seek(curPos, icSeekSet) < 0)
+    return false;
+
+  if ((uint64_t)endPos > (uint64_t)std::numeric_limits<size_t>::max())
+    return false;
+
+  size_t FileSize = (size_t)endPos;
 
   if (!FileSize)
-    return false;
-
-  if (!pIO->Seek(curPos, icSeekSet))
     return false;
 
   if (FileSize != m_Header.size)
@@ -3431,7 +3485,7 @@ getmediaXYZ:
     icFloatNumber *pWhite;
 
     if (samples && pNumTag->GetNumValues()>=samples) {
-      pWhite=new icFloatNumber[samples];
+      pWhite = new (std::nothrow) icFloatNumber[samples];
       if (pWhite) {
         pNumTag->GetValues(pWhite);
       }
@@ -3493,14 +3547,20 @@ getmediaXYZ:
  */
 CIccProfile* ReadIccProfile(const icChar *szFilename, bool bUseSubProfile/*=false*/)
 {
-  CIccFileIO *pFileIO = new CIccFileIO;
+  CIccFileIO *pFileIO = new (std::nothrow) CIccFileIO;
+  if (!pFileIO)
+    return NULL;
 
   if (!pFileIO->Open(szFilename, "rb")) {
     delete pFileIO;
     return NULL;
   }
 
-  CIccProfile *pIcc = new CIccProfile;
+  CIccProfile *pIcc = new (std::nothrow) CIccProfile;
+  if (!pIcc) {
+    delete pFileIO;
+    return NULL;
+  }
 
   if (!pIcc->Read(pFileIO, bUseSubProfile)) {
     delete pIcc;
@@ -3530,14 +3590,20 @@ CIccProfile* ReadIccProfile(const icChar *szFilename, bool bUseSubProfile/*=fals
 */
 CIccProfile* ReadIccProfile(const icWChar *szFilename, bool bUseSubProfile/*=false*/)
 {
-  CIccFileIO *pFileIO = new CIccFileIO;
+  CIccFileIO *pFileIO = new (std::nothrow) CIccFileIO;
+  if (!pFileIO)
+    return NULL;
 
   if (!pFileIO->Open(szFilename, L"rb")) {
     delete pFileIO;
     return NULL;
   }
 
-  CIccProfile *pIcc = new CIccProfile;
+  CIccProfile *pIcc = new (std::nothrow) CIccProfile;
+  if (!pIcc) {
+    delete pFileIO;
+    return NULL;
+  }
 
   if (!pIcc->Read(pFileIO)) {
     delete pIcc;
@@ -3568,14 +3634,20 @@ CIccProfile* ReadIccProfile(const icWChar *szFilename, bool bUseSubProfile/*=fal
 */
 CIccProfile* ReadIccProfile(const icUInt8Number *pMem, icUInt32Number nSize, bool /* bUseSubProfile =false*/)
 {
-  CIccMemIO *pMemIO = new CIccMemIO();
+  CIccMemIO *pMemIO = new (std::nothrow) CIccMemIO();
+  if (!pMemIO)
+    return NULL;
 
   if (!pMemIO->Attach((icUInt8Number*)pMem, nSize)) {
     delete pMemIO;
     return NULL;
   }
 
-  CIccProfile *pIcc = new CIccProfile;
+  CIccProfile *pIcc = new (std::nothrow) CIccProfile;
+  if (!pIcc) {
+    delete pMemIO;
+    return NULL;
+  }
 
   if (!pIcc->Read(pMemIO)) {
     delete pIcc;
@@ -3606,14 +3678,20 @@ CIccProfile* ReadIccProfile(const icUInt8Number *pMem, icUInt32Number nSize, boo
  */
 CIccProfile* OpenIccProfile(const icChar *szFilename, bool bUseSubProfile/*=false*/)
 {
-  CIccFileIO *pFileIO = new CIccFileIO;
+  CIccFileIO *pFileIO = new (std::nothrow) CIccFileIO;
+  if (!pFileIO)
+    return NULL;
 
   if (!pFileIO->Open(szFilename, "rb")) {
     delete pFileIO;
     return NULL;
   }
 
-  CIccProfile *pIcc = new CIccProfile;
+  CIccProfile *pIcc = new (std::nothrow) CIccProfile;
+  if (!pIcc) {
+    delete pFileIO;
+    return NULL;
+  }
 
   if (!pIcc->Attach(pFileIO, bUseSubProfile)) {
     delete pIcc;
@@ -3643,14 +3721,20 @@ CIccProfile* OpenIccProfile(const icChar *szFilename, bool bUseSubProfile/*=fals
 */
 CIccProfile* OpenIccProfile(const icWChar *szFilename, bool bUseSubProfile/*=false*/)
 {
-  CIccFileIO *pFileIO = new CIccFileIO;
+  CIccFileIO *pFileIO = new (std::nothrow) CIccFileIO;
+  if (!pFileIO)
+    return NULL;
 
   if (!pFileIO->Open(szFilename, L"rb")) {
     delete pFileIO;
     return NULL;
   }
 
-  CIccProfile *pIcc = new CIccProfile;
+  CIccProfile *pIcc = new (std::nothrow) CIccProfile;
+  if (!pIcc) {
+    delete pFileIO;
+    return NULL;
+  }
 
   if (!pIcc->Attach(pFileIO, bUseSubProfile)) {
     delete pIcc;
@@ -3681,14 +3765,20 @@ CIccProfile* OpenIccProfile(const icWChar *szFilename, bool bUseSubProfile/*=fal
 */
 CIccProfile* OpenIccProfile(const icUInt8Number *pMem, icUInt32Number nSize, bool bUseSubProfile/*=false*/)
 {
-  CIccMemIO *pMemIO = new CIccMemIO;
+  CIccMemIO *pMemIO = new (std::nothrow) CIccMemIO;
+  if (!pMemIO)
+    return NULL;
 
   if (!pMemIO->Attach((icUInt8Number*)pMem, nSize)) {
     delete pMemIO;
     return NULL;
   }
 
-  CIccProfile *pIcc = new CIccProfile;
+  CIccProfile *pIcc = new (std::nothrow) CIccProfile;
+  if (!pIcc) {
+    delete pMemIO;
+    return NULL;
+  }
 
   if (!pIcc->Attach(pMemIO, bUseSubProfile)) {
     delete pIcc;
@@ -3726,7 +3816,7 @@ CIccProfile* ValidateIccProfile(CIccIO *pIO, std::string &sReport, icValidateSta
     return NULL;
   }
 
-  CIccProfile *pIcc = new CIccProfile;
+  CIccProfile *pIcc = new (std::nothrow) CIccProfile;
 
   if (!pIcc) {
     delete pIO;
@@ -3768,7 +3858,9 @@ CIccProfile* ValidateIccProfile(CIccIO *pIO, std::string &sReport, icValidateSta
 */
 CIccProfile* ValidateIccProfile(const icWChar *szFilename, std::string &sReport, icValidateStatus &nStatus)
 {
-  CIccFileIO *pFileIO = new CIccFileIO;
+  CIccFileIO *pFileIO = new (std::nothrow) CIccFileIO;
+  if (!pFileIO)
+    return NULL;
 
   if (!pFileIO->Open(szFilename, L"rb")) {
     delete pFileIO;
@@ -3799,7 +3891,9 @@ CIccProfile* ValidateIccProfile(const icWChar *szFilename, std::string &sReport,
 */
 CIccProfile* ValidateIccProfile(const icChar *szFilename, std::string &sReport, icValidateStatus &nStatus)
 {
-  CIccFileIO *pFileIO = new CIccFileIO;
+  CIccFileIO *pFileIO = new (std::nothrow) CIccFileIO;
+  if (!pFileIO)
+    return NULL;
 
   if (!pFileIO->Open(szFilename, "rb")) {
     sReport = icMsgValidateCriticalError;
@@ -3810,8 +3904,7 @@ CIccProfile* ValidateIccProfile(const icChar *szFilename, std::string &sReport, 
     return NULL;
   }
 
-  CIccProfile *pIcc = new CIccProfile;
-
+  CIccProfile *pIcc = new (std::nothrow) CIccProfile;
   if (!pIcc) {
     delete pFileIO;
     return NULL;
@@ -3853,7 +3946,9 @@ CIccProfile* ValidateIccProfile(const icChar *szFilename, std::string &sReport, 
 */
 CIccProfile* ValidateIccProfile(const icUInt8Number* pMem, icUInt32Number nSize, std::string& sReport, icValidateStatus& nStatus)
 {
-  CIccMemIO* pMemIO = new CIccMemIO;
+  CIccMemIO* pMemIO = new (std::nothrow) CIccMemIO;
+  if (!pMemIO)
+    return NULL;
 
   if (!pMemIO->Attach((icUInt8Number*)pMem, nSize)) {
     sReport = icMsgValidateCriticalError;
@@ -3862,8 +3957,7 @@ CIccProfile* ValidateIccProfile(const icUInt8Number* pMem, icUInt32Number nSize,
     return NULL;
   }
 
-  CIccProfile* pIcc = new CIccProfile;
-
+  CIccProfile* pIcc = new (std::nothrow) CIccProfile;
   if (!pIcc) {
     delete pMemIO;
     return NULL;
@@ -3910,6 +4004,16 @@ bool SaveIccProfile(const icChar *szFilename, CIccProfile *pIcc, icProfileIDSave
   }
 
   if (!pIcc->Write(&FileIO, nWriteId)) {
+    FileIO.Close();
+    return false;
+  }
+
+  if (!FileIO.Flush()) {
+    FileIO.Close();
+    return false;
+  }
+
+  if (!FileIO.CloseFile()) {
     return false;
   }
 
@@ -3944,6 +4048,10 @@ bool SaveIccProfile(FILE *f, CIccProfile *pIcc, icProfileIDSaveMethod nWriteId)
     return false;
   }
 
+  if (!FileIO.Flush()) {
+    return false;
+  }
+
   FileIO.Detach();
 
   return true;
@@ -3975,6 +4083,16 @@ bool SaveIccProfile(const icWChar *szFilename, CIccProfile *pIcc, icProfileIDSav
   }
 
   if (!pIcc->Write(&FileIO, nWriteId)) {
+    FileIO.Close();
+    return false;
+  }
+
+  if (!FileIO.Flush()) {
+    FileIO.Close();
+    return false;
+  }
+
+  if (!FileIO.CloseFile()) {
     return false;
   }
 
@@ -4000,18 +4118,28 @@ void CalcProfileID(CIccIO *pIO, icProfileID *pProfileID)
   MD5_CTX context;
   icUInt8Number buffer[1024] = {0};
 
+  if (!pIO || !pProfileID)
+    return;
+  memset(pProfileID, 0, sizeof(*pProfileID));
+
   //remember where we are
-  size_t pos = pIO->Tell();
+  int64_t pos = pIO->Tell();
+  if (pos < 0)
+    return;
 
   //Get length and set up to read entire file
   size_t len = pIO->GetLength();
-  pIO->Seek(0, icSeekSet);
+  if (pIO->Seek(0, icSeekSet) < 0) {
+    pIO->Seek(pos, icSeekSet);
+    return;
+  }
 
   //read file updating checksum as we go
   icMD5Init(&context);
   nBlock = 0;
   while(len) {
-    size_t num = pIO->Read8(&buffer[0],1024);
+    size_t request = len < sizeof(buffer) ? len : sizeof(buffer);
+    size_t num = pIO->Read8(&buffer[0], request);
     if (num == 0)
         break;              // can't give a useful error here, but we need to break the infinite loop
     if (!nBlock) {  // Zero out 3 header contents in Profile ID calculation

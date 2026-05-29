@@ -37,13 +37,15 @@ ctest --test-dir out/vs2022-x64 -C Release --output-on-failure --no-tests=error
 cmake --build out/vs2022-x64 --config Release --target check
 ```
 
-Linux currently registers 19 CTest suites. Windows full tool builds currently
-register 5 CTest suites: the IccConnect threaded CMM regression, two
-batch-backed suites through `Build/Cmake/Testing/RunWindowsBatchTest.cmake`, the
-iccDumpProfile smoke suite, and the issue-987 shared export suite. Windows
-feature-disabled builds register the subset whose targets are available. The
-Windows batch wrapper runs scripts from a disposable copy of `Testing/` under
-the build tree and must not dirty the source `Testing/` directory.
+Windows full tool builds register the IccConnect threaded CMM, EmbedIO Read8
+bounds, FileIO length-position, FileIO seek/tell, parser restore-call, and
+profile write failure regressions, two batch-backed suites through
+`Build/Cmake/Testing/RunWindowsBatchTest.cmake`, the
+iccDumpProfile smoke suite, the issue-987 shared export suite, and the PAWG
+report smoke suite. Windows feature-disabled builds register the subset whose
+targets are available. The Windows batch wrapper runs scripts from a disposable
+copy of `Testing/` under the build tree and must not dirty the source
+`Testing/` directory.
 
 Windows CTest wrappers source runtime DLL directories from `CMakeCache.txt`
 through `Build/Cmake/Testing/WindowsRuntimePaths.cmake`. Keep that helper in
@@ -72,6 +74,7 @@ Script-based gates live in `.github/scripts/`, including:
 - `iccdev-mluc-read-utf16-regression-tests.sh`
 - `iccdev-mluc-iso-code-regression-tests.sh`
 - `iccdev-pcc-zero-illuminant-regression-tests.sh`
+- `iccdev-cam-degenerate-regression-tests.sh`
 - `iccdev-calculator-regression-tests.sh`
 - `iccdev-lut16-zero-curve-regression-tests.sh`
 - `iccdev-namedcolor-apply-regression-tests.sh`
@@ -112,7 +115,9 @@ in the same change.
    in automated CI.
 5. If the profile affects automated coverage, update the relevant expected
    counts in `docs/ctest.md`, `Build/Cmake/Testing/CMakeLists.txt`, and the
-   workflows that assert CTest or generated-profile totals.
+   workflows that assert CTest or generated-profile totals. For WASM profile
+   parity, also update `Build/Cmake/wasm-package/regression.js`; workflow
+   inputs alone do not change the packaged fallback count.
 
 ## Maintainer CTest Suite Changes
 
@@ -125,9 +130,7 @@ CTest or workflow infrastructure directly.
 2. Register the test in `Build/Cmake/Testing/CMakeLists.txt`.
 3. Use `FIXTURES_REQUIRED iccdev_profiles` when the test needs generated
    profiles.
-4. Update Linux CTest count assertions in `ci-iccdev-tool-tests.yml` when
-   adding or removing Linux suites.
-5. Update `docs/ctest.md` with the test name, source script, labels, and any
+4. Update `docs/ctest.md` with the test name, source script, labels, and any
    count changes.
 
 ## Validation Output

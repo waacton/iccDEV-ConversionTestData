@@ -82,8 +82,37 @@
 #include "IccTagLut.h"
 #include "IccTagMPE.h"
 #include "IccMpeBasic.h"
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 
+// ============================================================================
+
+static
+FILE* icOpenWriteBinaryFile(const char* szFname)
+{
+  if (!szFname || !szFname[0])
+    return stdout;
+
+#if defined(_WIN32)
+  return fopen(szFname, "wb");
+#else
+  int fd = open(szFname, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+  if (fd < 0)
+    return nullptr;
+
+  FILE* f = fdopen(fd, "wb");
+  if (!f)
+    close(fd);
+
+  return f;
+#endif
+}
+
+// ============================================================================
 
 class ILinkWriter
 {
@@ -172,7 +201,7 @@ public:
       return false;
     }
 
-    m_f = fopen(m_filename.c_str(), "wb");
+    m_f = icOpenWriteBinaryFile(m_filename.c_str());
     if (!m_f) {
       printf("Unable to open '%s'\n", m_filename.c_str());
       return false;
@@ -232,12 +261,20 @@ public:
 
   virtual bool finish()
   {
-    if (m_f)
-      fclose(m_f);
+    bool rv = true;
+
+    if (m_f) {
+      if (fflush(m_f))
+        rv = false;
+      if (ferror(m_f))
+        rv = false;
+      if (fclose(m_f))
+        rv = false;
+    }
 
     m_f = nullptr;
 
-    return true;
+    return rv;
   }
 
 protected:
@@ -261,8 +298,7 @@ public:
   CDevLinkWriter() { }
   virtual ~CDevLinkWriter()
   {
-    if (m_pProfile)
-      delete m_pProfile;
+    delete m_pProfile;
   }
 
   virtual bool setFile(const char* szOutputFile)
@@ -676,6 +712,11 @@ int main(int argc, icChar* argv[])
   pWriter->setFile(argv[1]);
 
   int nLutSize = atoi(argv[3]);
+  if (nLutSize <= 0) {
+    printf("Invalid LUT sizes\n");
+    return -1;
+  }
+  
   pWriter->setLutSize(nLutSize);
 
   pWriter->setOption(atoi(argv[4]));
@@ -845,12 +886,14 @@ int main(int argc, icChar* argv[])
       else
         break;
     }
-
+ 
     //Display status of how much we have accomplished
-    curPer = (int)((float)(c + 1) * 100.0f / (float)lutCount);
-    if (curPer != lastPer) {
-      printf("\r%d%%", curPer);
-      lastPer = curPer;
+    if (lutCount > 0) {     // explicit check to avoid divide by zero
+        curPer = ((c + 1) * 100) / lutCount;
+        if (curPer != lastPer) {
+          printf("\r%d%%", curPer);
+          lastPer = curPer;
+        }
     }
   }
   
@@ -863,8 +906,8 @@ int main(int argc, icChar* argv[])
   }
   else {
     printf("\nUnable to write LUT to '%s'\n", argv[1]);
+    return -1;
   }
 
   return 0;
 }
-

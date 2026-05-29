@@ -70,6 +70,8 @@
 
 #include "IccCmmSearch.h"
 
+#include <cmath>
+
 
 CIccApplyCmmSearch::CIccApplyCmmSearch(CIccCmm* pBaseCmm) : CIccApplyCmm(pBaseCmm)
 {
@@ -110,6 +112,7 @@ icFloatNumber CIccApplyCmmSearch::costFunc(CIccSearchVec& point)
 {
   CIccCmmSearch* pCmm = (CIccCmmSearch*)m_pCmm;
   icFloatNumber sum = 0.0;
+  icFloatNumber div = 0.0;
   for (size_t i = 0; i < m_nApply; i++) {
     pCmm->m_dst_to_mid[i]->Apply(&m_pixel[0], &point.vec()[0]);
 
@@ -122,8 +125,9 @@ icFloatNumber CIccApplyCmmSearch::costFunc(CIccSearchVec& point)
       difSum += sq(m_pixel[j] - m_mid_data[i][j]);
     }
     sum += sqrt(difSum) * pCmm->m_weight[i];
+    div += pCmm->m_weight[i];
   }
-  return sum;
+  return sum / div;
 }
 
 bool CIccApplyCmmSearch::boundsCheck(const CIccSearchVec& point, icFloatNumber& boundsCost) const
@@ -152,7 +156,7 @@ bool CIccApplyCmmSearch::boundsCheck(const CIccSearchVec& point, icFloatNumber& 
       }
       else if (v > m_maxBounds[i]) {
         rv = true;
-        boundsCost += sq(m_maxBounds[i] - 1.0f);
+        boundsCost += sq(v - m_maxBounds[i]);
       }
     }
   }
@@ -208,6 +212,23 @@ icStatusCMM CIccApplyCmmSearch::Apply(icFloatNumber* DstPixel, const icFloatNumb
   return icCmmStatOk;
 }
 
+icStatusCMM CIccApplyCmmSearch::GetApplyCost(icFloatNumber& dCost, const icFloatNumber* SrcPixel)
+{
+  CIccCmmSearch* pCmm = (CIccCmmSearch*)m_pCmm;
+  icUInt32Number nDstSamples = pCmm->GetDestSamples();
+
+  // Find device values that best match the SrcPixel
+  std::vector<icFloatNumber> dstPixel(nDstSamples, 0);
+  icStatusCMM rv = Apply(&dstPixel[0], SrcPixel);
+  if (rv != icCmmStatOk) 
+    return rv;
+
+  // costFunc reads m_pixel/m_mid_data/etc. set up by the preceding Apply().
+  // Evaluate it at the found device-value point and return that cost.
+  CIccSearchVec point(dstPixel);
+  dCost = costFunc(point);
+  return icCmmStatOk;
+}
 
 CIccCmmSearch::CIccCmmSearch(bool bUsesBounds, icFloatNumber overBoundsCost, const icFloatVector &minBounds, const icFloatVector &maxBounds)
 {
@@ -219,17 +240,10 @@ CIccCmmSearch::CIccCmmSearch(bool bUsesBounds, icFloatNumber overBoundsCost, con
 
 CIccCmmSearch::~CIccCmmSearch()
 {
-  if (m_pSrcProfile)
-    delete m_pSrcProfile;
-
-  if (m_pMidProfile)
-    delete m_pMidProfile;
-
-  if (m_pDstProfile)
-    delete m_pDstProfile;
-
-  if (m_pDstInitProfile)
-    delete m_pDstInitProfile;
+  delete m_pSrcProfile;
+  delete m_pMidProfile;
+  delete m_pDstProfile;
+  delete m_pDstInitProfile;
 
   for (auto pPcc : m_pcc) {
     delete pPcc;
@@ -306,6 +320,9 @@ void CIccCmmSearch::SetDstInitProfile(CIccProfile* pProfile,
 
 icStatusCMM CIccCmmSearch::AttachPCC(IIccProfileConnectionConditions* pPCC, icFloatNumber dWeight)
 {
+  if (!pPCC || !std::isfinite(dWeight) || dWeight <= 0.0f)
+    return icCmmStatBadXform;
+
   m_pcc.push_back(pPCC);
   m_weight.push_back(dWeight);
 
@@ -457,4 +474,15 @@ icStatusCMM CIccCmmSearch::RemoveAllIO()
   m_mid_to_dst->RemoveAllIO();
 
   return icCmmStatOk;
+}
+
+icStatusCMM CIccCmmSearch::GetApplyCost(icFloatNumber& dCost, const icFloatNumber* SrcPixel)
+{
+  dCost = -1;
+  if (!m_bValid || !m_pApply)
+    return icCmmStatBad;
+
+  CIccApplyCmmSearch* pApply = static_cast<CIccApplyCmmSearch*>(m_pApply);
+
+  return pApply->GetApplyCost(dCost, SrcPixel);
 }

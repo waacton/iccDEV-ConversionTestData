@@ -44,6 +44,7 @@ function(iccdev_add_check_dependencies)
       iccApplyToLink
       iccDescribeSinkTest
       iccDumpProfile
+      iccPawgReport
       iccFromCube
       iccFromJson
       iccFromXml
@@ -116,6 +117,201 @@ function(iccdev_add_iccconnect_thread_test)
   endif()
 endfunction()
 
+function(iccdev_add_embedio_read8_bounds_test)
+  if(NOT TARGET "${TARGET_LIB_ICCPROFLIB}")
+    return()
+  endif()
+
+  add_executable(iccEmbedIoRead8BoundsTest
+    "${ICCDEV_REPO_ROOT}/.github/ci/regression/embedio-read8-bounds.cpp"
+  )
+  target_link_libraries(iccEmbedIoRead8BoundsTest PRIVATE ${TARGET_LIB_ICCPROFLIB})
+  add_dependencies(check iccEmbedIoRead8BoundsTest)
+
+  add_test(
+    NAME iccdev.embedio-read8-bounds
+    COMMAND "$<TARGET_FILE:iccEmbedIoRead8BoundsTest>"
+  )
+  set_tests_properties(iccdev.embedio-read8-bounds PROPERTIES
+    WORKING_DIRECTORY "${ICCDEV_REPO_ROOT}"
+    TIMEOUT 60
+    LABELS "iccdev;embedio;regression"
+  )
+  if(WIN32)
+    set(_embedio_windows_env_mods
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:iccEmbedIoRead8BoundsTest>"
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:${TARGET_LIB_ICCPROFLIB}>"
+    )
+    foreach(_runtime_path IN LISTS ICCDEV_WINDOWS_RUNTIME_PATHS)
+      list(APPEND _embedio_windows_env_mods
+        "PATH=path_list_prepend:${_runtime_path}")
+    endforeach()
+    set_tests_properties(iccdev.embedio-read8-bounds PROPERTIES
+      ENVIRONMENT_MODIFICATION "${_embedio_windows_env_mods}"
+    )
+  endif()
+endfunction()
+
+function(iccdev_add_fileio_getlength_position_test)
+  if(NOT TARGET "${TARGET_LIB_ICCPROFLIB}")
+    return()
+  endif()
+
+  add_executable(iccFileIoGetLengthPositionTest
+    "${ICCDEV_REPO_ROOT}/.github/ci/regression/fileio-getlength-position.cpp"
+  )
+  target_link_libraries(iccFileIoGetLengthPositionTest PRIVATE ${TARGET_LIB_ICCPROFLIB})
+  add_dependencies(check iccFileIoGetLengthPositionTest)
+
+  add_test(
+    NAME iccdev.fileio-getlength-preserves-position
+    COMMAND
+      "$<TARGET_FILE:iccFileIoGetLengthPositionTest>"
+      "${ICCDEV_TESTING_DIR}/sRGB_v4_ICC_preference.icc"
+      "${ICCDEV_TEST_OUTDIR}/fileio-getlength-roundtrip.icc"
+  )
+  set_tests_properties(iccdev.fileio-getlength-preserves-position PROPERTIES
+    WORKING_DIRECTORY "${ICCDEV_REPO_ROOT}"
+    TIMEOUT 60
+    LABELS "iccdev;fileio;issue-987;regression"
+  )
+  if(WIN32)
+    set(_fileio_windows_env_mods
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:iccFileIoGetLengthPositionTest>"
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:${TARGET_LIB_ICCPROFLIB}>"
+    )
+    foreach(_runtime_path IN LISTS ICCDEV_WINDOWS_RUNTIME_PATHS)
+      list(APPEND _fileio_windows_env_mods
+        "PATH=path_list_prepend:${_runtime_path}")
+    endforeach()
+    set_tests_properties(iccdev.fileio-getlength-preserves-position PROPERTIES
+      ENVIRONMENT_MODIFICATION "${_fileio_windows_env_mods}"
+    )
+  else()
+    set_tests_properties(iccdev.fileio-getlength-preserves-position PROPERTIES
+      ENVIRONMENT "${ICCDEV_TEST_ENV}"
+    )
+  endif()
+endfunction()
+
+function(iccdev_add_fileio_seek_tell_test)
+  if(NOT TARGET "${TARGET_LIB_ICCPROFLIB}")
+    return()
+  endif()
+
+  add_executable(iccFileIoSeekTellTest
+    "${ICCDEV_REPO_ROOT}/.github/ci/regression/fileio-seek-tell.cpp"
+  )
+  target_link_libraries(iccFileIoSeekTellTest PRIVATE ${TARGET_LIB_ICCPROFLIB})
+  add_dependencies(check iccFileIoSeekTellTest)
+
+  add_test(
+    NAME iccdev.fileio-seek-tell
+    COMMAND
+      "$<TARGET_FILE:iccFileIoSeekTellTest>"
+  )
+  set_tests_properties(iccdev.fileio-seek-tell PROPERTIES
+    WORKING_DIRECTORY "${ICCDEV_TEST_OUTDIR}"
+    TIMEOUT 60
+    LABELS "iccdev;fileio;regression"
+  )
+  if(WIN32)
+    set(_fileio_windows_env_mods
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:iccFileIoSeekTellTest>"
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:${TARGET_LIB_ICCPROFLIB}>"
+    )
+    foreach(_runtime_path IN LISTS ICCDEV_WINDOWS_RUNTIME_PATHS)
+      list(APPEND _fileio_windows_env_mods
+        "PATH=path_list_prepend:${_runtime_path}")
+    endforeach()
+    set_tests_properties(iccdev.fileio-seek-tell PROPERTIES
+      ENVIRONMENT_MODIFICATION "${_fileio_windows_env_mods}"
+    )
+  endif()
+endfunction()
+
+function(iccdev_add_profile_write_failure_test)
+  if(NOT TARGET "${TARGET_LIB_ICCPROFLIB}")
+    return()
+  endif()
+
+  add_executable(iccProfileWriteFailureTest
+    "${ICCDEV_REPO_ROOT}/.github/ci/regression/profile-write-failure.cpp"
+  )
+  target_link_libraries(iccProfileWriteFailureTest PRIVATE ${TARGET_LIB_ICCPROFLIB})
+  add_dependencies(check iccProfileWriteFailureTest)
+
+  add_test(
+    NAME iccdev.profile-write-failure
+    COMMAND "$<TARGET_FILE:iccProfileWriteFailureTest>"
+  )
+  set_tests_properties(iccdev.profile-write-failure PROPERTIES
+    WORKING_DIRECTORY "${ICCDEV_REPO_ROOT}"
+    TIMEOUT 60
+    LABELS "iccdev;profile;write;regression"
+  )
+  if(WIN32)
+    set(_profile_write_windows_env_mods
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:iccProfileWriteFailureTest>"
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:${TARGET_LIB_ICCPROFLIB}>"
+    )
+    foreach(_runtime_path IN LISTS ICCDEV_WINDOWS_RUNTIME_PATHS)
+      list(APPEND _profile_write_windows_env_mods
+        "PATH=path_list_prepend:${_runtime_path}")
+    endforeach()
+    set_tests_properties(iccdev.profile-write-failure PROPERTIES
+      ENVIRONMENT_MODIFICATION "${_profile_write_windows_env_mods}"
+    )
+  endif()
+endfunction()
+
+function(iccdev_add_parser_restore_calls_test)
+  if(NOT TARGET "${TARGET_LIB_ICCPROFLIB}")
+    return()
+  endif()
+
+  add_executable(iccParserRestoreCallsTest
+    "${ICCDEV_REPO_ROOT}/.github/ci/regression/parser-restore-calls.cpp"
+  )
+  target_compile_features(iccParserRestoreCallsTest PRIVATE cxx_std_17)
+  target_link_libraries(iccParserRestoreCallsTest PRIVATE ${TARGET_LIB_ICCPROFLIB})
+
+  add_dependencies(check iccParserRestoreCallsTest)
+
+  if(WIN32)
+    add_test(
+      NAME iccdev.parser-restore-calls
+      COMMAND "$<TARGET_FILE:iccParserRestoreCallsTest>"
+    )
+  else()
+    add_test(
+      NAME iccdev.parser-restore-calls
+      COMMAND
+        "${CMAKE_COMMAND}" -E env
+        ${ICCDEV_TEST_ENV}
+        "$<TARGET_FILE:iccParserRestoreCallsTest>"
+    )
+  endif()
+  set_tests_properties(iccdev.parser-restore-calls PROPERTIES
+    WORKING_DIRECTORY "${ICCDEV_REPO_ROOT}"
+    TIMEOUT 60
+    LABELS "iccdev;profile;parser;io;regression"
+  )
+  if(WIN32)
+    set(_parser_restore_windows_env_mods
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:iccParserRestoreCallsTest>"
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:${TARGET_LIB_ICCPROFLIB}>"
+    )
+    foreach(_runtime_path IN LISTS ICCDEV_WINDOWS_RUNTIME_PATHS)
+      list(APPEND _parser_restore_windows_env_mods
+        "PATH=path_list_prepend:${_runtime_path}")
+    endforeach()
+    set_tests_properties(iccdev.parser-restore-calls PROPERTIES
+      ENVIRONMENT_MODIFICATION "${_parser_restore_windows_env_mods}"
+    )
+  endif()
+endfunction()
+
 if(WIN32)
   function(iccdev_add_windows_batch_test NAME TIMEOUT LABELS SCRIPT)
     set(_one_value_args EXPECTED_PROFILE_PARSE_COUNT EXPECTED_OUTPUT FORBIDDEN_REGEX)
@@ -172,7 +368,7 @@ if(WIN32)
       300
       "iccdev;windows;setup;profiles"
       "${ICCDEV_TESTING_DIR}/CreateAllProfiles.bat"
-      EXPECTED_PROFILE_PARSE_COUNT 129
+      EXPECTED_PROFILE_PARSE_COUNT 130
     )
     set_tests_properties(iccdev.windows-create-profiles PROPERTIES
       FIXTURES_SETUP iccdev_profiles
@@ -215,6 +411,27 @@ if(WIN32)
     add_dependencies(check iccDumpProfile)
   endif()
 
+  if(TARGET iccPawgReport)
+    add_test(
+      NAME iccdev.windows-pawg-report-smoke
+      COMMAND
+        "${CMAKE_COMMAND}"
+        "-DICCDEV_TEST_NAME=iccdev.windows-pawg-report-smoke"
+        "-DICCDEV_TEST_OUTDIR=${ICCDEV_TEST_OUTDIR}/iccdev-windows-pawg-report-smoke"
+        "-DICCDEV_BUILD_DIR=${CMAKE_BINARY_DIR}"
+        "-DICCDEV_PAWG_EXE=$<TARGET_FILE:iccPawgReport>"
+        "-DICCDEV_PROFILE=${ICCDEV_TESTING_DIR}/sRGB_v4_ICC_preference.icc"
+        "-DICCDEV_EXPECTED_ITEM_COUNT=31"
+        -P "${CMAKE_CURRENT_LIST_DIR}/RunWindowsPawgReportSmokeTest.cmake"
+    )
+    set_tests_properties(iccdev.windows-pawg-report-smoke PROPERTIES
+      WORKING_DIRECTORY "${ICCDEV_TEST_OUTDIR}"
+      TIMEOUT 60
+      LABELS "iccdev;windows;tools;pawg;report;profile"
+    )
+    add_dependencies(check iccPawgReport)
+  endif()
+
   if(ENABLE_SHARED_LIBS AND TARGET IccProfLib2)
     add_test(
       NAME iccdev.issue-987-shared-mpe-export
@@ -243,6 +460,11 @@ if(WIN32)
   endif()
 
   iccdev_add_iccconnect_thread_test()
+  iccdev_add_embedio_read8_bounds_test()
+  iccdev_add_fileio_getlength_position_test()
+  iccdev_add_profile_write_failure_test()
+  iccdev_add_fileio_seek_tell_test()
+  iccdev_add_parser_restore_calls_test()
 
   return()
 endif()
@@ -262,6 +484,7 @@ set(ICCDEV_TOOL_PATHS
   "${ICCDEV_TOOLS_DIR}/IccFromJson"
   "${ICCDEV_TOOLS_DIR}/IccFromXml"
   "${ICCDEV_TOOLS_DIR}/IccJpegDump"
+  "${ICCDEV_TOOLS_DIR}/IccPawgReport"
   "${ICCDEV_TOOLS_DIR}/IccPngDump"
   "${ICCDEV_TOOLS_DIR}/IccRoundTrip"
   "${ICCDEV_TOOLS_DIR}/IccSpecSepToTiff"
@@ -280,6 +503,8 @@ set(ICCDEV_TEST_ENV
   "PATH=${ICCDEV_TOOL_PATH}:$ENV{PATH}"
   "LD_LIBRARY_PATH=${ICCDEV_SHARED_LIBRARY_PATH}:$ENV{LD_LIBRARY_PATH}"
   "DYLD_LIBRARY_PATH=${ICCDEV_SHARED_LIBRARY_PATH}:$ENV{DYLD_LIBRARY_PATH}"
+  "CC=${CMAKE_C_COMPILER}"
+  "CXX=${CMAKE_CXX_COMPILER}"
   "ASAN_OPTIONS=halt_on_error=0,detect_leaks=0"
   "UBSAN_OPTIONS=halt_on_error=0,print_stacktrace=1"
   "LLVM_PROFILE_FILE=/dev/null"
@@ -290,6 +515,11 @@ set(ICCDEV_TEST_ENV
 )
 
 iccdev_add_iccconnect_thread_test()
+iccdev_add_embedio_read8_bounds_test()
+iccdev_add_fileio_getlength_position_test()
+iccdev_add_profile_write_failure_test()
+iccdev_add_fileio_seek_tell_test()
+iccdev_add_parser_restore_calls_test()
 
 function(iccdev_add_script_test NAME TIMEOUT LABELS WORKING_DIRECTORY SCRIPT)
   if(NOT EXISTS "${SCRIPT}")
@@ -379,6 +609,33 @@ set_tests_properties(iccdev.dump-profile-header-regression PROPERTIES
 )
 
 iccdev_add_script_test(
+  iccdev.tiffdump-output-hardening
+  120
+  "iccdev;tiffdump;output;regression;asan"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-tiffdump-output-hardening-tests.sh"
+)
+set_tests_properties(iccdev.tiffdump-output-hardening PROPERTIES
+  FIXTURES_REQUIRED iccdev_profiles
+)
+
+iccdev_add_script_test(
+  iccdev.basic-string-regressions
+  120
+  "iccdev;xml;basic-string;regression;asan"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-basic-string-regression-tests.sh"
+)
+
+iccdev_add_script_test(
+  iccdev.pawg-report-regressions
+  120
+  "iccdev;pawg;report;regression;asan"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-pawg-report-regression-tests.sh"
+)
+
+iccdev_add_script_test(
   iccdev.json-cfg
   300
   "iccdev;json;cfg;asan"
@@ -387,6 +644,22 @@ iccdev_add_script_test(
 )
 set_tests_properties(iccdev.json-cfg PROPERTIES
   FIXTURES_REQUIRED iccdev_profiles
+)
+
+iccdev_add_script_test(
+  iccdev.issue-1121-json-envvars-regression
+  60
+  "iccdev;json;cfg;envvars;issue-1121;regression;asan"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-issue-1121-json-envvars-regression.sh"
+)
+
+iccdev_add_script_test(
+  iccdev.issue-1166-cam-hyperbolicinv-regression
+  60
+  "iccdev;json;cfg;cam;issue-1166;regression;asan"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-issue-1166-cam-hyperbolicinv-regression.sh"
 )
 
 iccdev_add_script_test(
@@ -409,6 +682,25 @@ iccdev_add_script_test(
 )
 set_tests_properties(iccdev.json-parser-regressions PROPERTIES
   FIXTURES_REQUIRED iccdev_profiles
+)
+
+iccdev_add_script_test(
+  iccdev.cam-impact-surround-regression
+  300
+  "iccdev;cam;xml;validation;regression;asan"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-cam-impact-surround-regression.sh"
+)
+set_tests_properties(iccdev.cam-impact-surround-regression PROPERTIES
+  FIXTURES_REQUIRED iccdev_profiles
+)
+
+iccdev_add_script_test(
+  iccdev.issue-1079-fromjson-soft-failure
+  60
+  "iccdev;json;fromjson;issue-1079;regression;asan"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-issue-1079-fromjson-soft-failure.sh"
 )
 
 iccdev_add_script_test(
@@ -467,6 +759,99 @@ set_tests_properties(iccdev.pcc-zero-illuminant-regressions PROPERTIES
 )
 
 iccdev_add_script_test(
+  iccdev.iccconnect-search-cost-regressions
+  300
+  "iccdev;iccconnect;search;cost;regression;asan"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-iccconnect-search-cost-regression-tests.sh"
+)
+set_tests_properties(iccdev.iccconnect-search-cost-regressions PROPERTIES
+  FIXTURES_REQUIRED iccdev_profiles
+)
+
+iccdev_add_script_test(
+  iccdev.cam-degenerate-regressions
+  300
+  "iccdev;cam;regression;asan"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-cam-degenerate-regression-tests.sh"
+)
+
+iccdev_add_script_test(
+  iccdev.issue-1097-applyprofiles-hbo
+  120
+  "iccdev;tools;applyprofiles;asan;regression"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-issue-1097-applyprofiles-hbo.sh"
+)
+set_tests_properties(iccdev.issue-1097-applyprofiles-hbo PROPERTIES
+  SKIP_RETURN_CODE 77
+)
+
+iccdev_add_script_test(
+  iccdev.issue-1151-pngdump-icc-injection
+  60
+  "iccdev;tools;pngdump;asan;regression"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-issue-1151-pngdump-icc-injection.sh"
+)
+
+iccdev_add_script_test(
+  iccdev.issue-1167-jpegdump-byte-regression
+  120
+  "iccdev;tools;jpegdump;asan;regression"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-issue-1167-jpegdump-byte-regression.sh"
+)
+
+iccdev_add_script_test(
+  iccdev.issue-1168-pawg-calculator-hbo
+  120
+  "iccdev;tools;pawg;calculator;asan;regression"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-issue-1168-pawg-calculator-hbo.sh"
+)
+
+iccdev_add_script_test(
+  iccdev.issue-1148-writer-device-regression
+  120
+  "iccdev;tools;fromcube;fromxml;asan;regression"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-issue-1148-writer-device-regression.sh"
+)
+set_tests_properties(iccdev.issue-1148-writer-device-regression PROPERTIES
+  FIXTURES_REQUIRED iccdev_profiles
+)
+
+iccdev_add_script_test(
+  iccdev.issue-1150-output-failure-regression
+  120
+  "iccdev;tools;output;asan;regression"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-issue-1150-output-failure-regression.sh"
+)
+set_tests_properties(iccdev.issue-1150-output-failure-regression PROPERTIES
+  FIXTURES_REQUIRED iccdev_profiles
+  SKIP_RETURN_CODE 77
+)
+
+iccdev_add_script_test(
+  iccdev.issue-1178-fromcube-devnull
+  60
+  "iccdev;tools;fromcube;asan;regression"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-issue-1178-fromcube-devnull-regression.sh"
+)
+
+iccdev_add_script_test(
+  iccdev.issue-1179-fromcube-regression
+  120
+  "iccdev;tools;fromcube;mluc;asan;regression"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-issue-1179-fromcube-regression.sh"
+)
+
+iccdev_add_script_test(
   iccdev.calculator-regressions
   300
   "iccdev;calculator;regression;asan"
@@ -507,6 +892,17 @@ iccdev_add_script_test(
   "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-v5-namedcmm-regression-tests.sh"
 )
 set_tests_properties(iccdev.v5-namedcmm-regressions PROPERTIES
+  FIXTURES_REQUIRED iccdev_profiles
+)
+
+iccdev_add_script_test(
+  iccdev.namedcolor-overprint-regressions
+  300
+  "iccdev;namedcolor;overprint;regression;asan"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-namedcolor-overprint-regression-tests.sh"
+)
+set_tests_properties(iccdev.namedcolor-overprint-regressions PROPERTIES
   FIXTURES_REQUIRED iccdev_profiles
 )
 

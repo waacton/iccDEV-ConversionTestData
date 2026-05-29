@@ -20,6 +20,7 @@ governance, or security automation.
 Confirm that the work is maintainer-owned before editing:
 
 - `.github/**`
+- `Dockerfile*`
 - `Build/Cmake/Testing/**`
 - workflow count assertions
 - CPack, release packaging, installer, or artifact publishing logic
@@ -48,16 +49,23 @@ Choose the smallest gate that proves the behavior:
 
 ## Required Updates
 
-- Update `docs/ctest.md` for CTest names, fixtures, expected suite counts,
-  profile parse counts, or add-test process changes.
+- Update `docs/ctest.md` for CTest names, fixtures, profile parse counts, or
+  add-test process changes.
 - Update `.github/instructions/testing.instructions.md` when the test becomes
   standard policy.
 - Update `docs/regression-workflow-governance.md` for workflow process changes.
+- Update `docs/build.md` and `docs/regression-workflow-governance.md` when
+  changing maintainer Dockerfiles, container dependencies, GHCR publish flow, or
+  pinned regression image digests.
 - Update `.github/skills/README.md` or a skill when the process becomes a
   repeatable maintainer workflow.
 - When adding cases inside an existing script-backed suite, document that the
   CTest suite count is unchanged and validate both direct script execution and
   the CTest wrapper.
+- When changing generated-profile totals, update every assertion source. For
+  WASM parity this includes `Build/Cmake/wasm-package/regression.js`,
+  `.github/workflows/ci-pr-wasm.yml`, `.github/workflows/ci-pr-action.yml`, and
+  `.github/workflows/ci-latest-release.yml`.
 - For Windows executable tests, keep runtime DLL path handling centralized in
   `Build/Cmake/Testing/WindowsRuntimePaths.cmake`; update docs and skills when
   a test needs vcpkg, Visual Studio LLVM, or MinGW runtime DLLs.
@@ -84,6 +92,18 @@ ICCDEV_TEST_OUTDIR=/tmp/iccdev-tool-output \
   .github/scripts/iccdev-tool-coverage-baseline.sh --asan --quick
 ctest --test-dir build -R '^iccdev\.tool-coverage$' --output-on-failure
 ```
+
+For `Dockerfile*` updates:
+
+```bash
+docker build -t iccdev-container-check -f <Dockerfile> .
+docker run --rm iccdev-container-check <smoke-command>
+```
+
+For `Dockerfile.ci-regression`, use a no-cache build and smoke `clang-18`,
+`clang++-18`, `cmake`, and `/usr/bin/time`. If the image must be published,
+allow the branch in the `ghcr-publish` environment before triggering deployment,
+then pin the published digest in `ci-iccdev-tool-tests.yml`.
 
 Workflow YAML:
 

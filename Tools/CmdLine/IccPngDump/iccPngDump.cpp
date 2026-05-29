@@ -80,6 +80,7 @@
 
 #include <iostream>
 #include <fstream>
+#include <limits>
 #include <vector>
 #include <cstdio>
 #include <cstdlib>
@@ -105,18 +106,9 @@
     typedef png_bytep png_icc_profilep;
 #endif
 
-// Platform-specific trap macro for debugging fatal errors
-#ifdef __x86_64__
-    #define TRAP() asm volatile ("ud2")
-#elif defined(__aarch64__)
-    #define TRAP() asm volatile ("brk #0")
-#else
-    #define TRAP() abort()
-#endif
-
 // Logging macros for error handling
 #define LOG_ERROR(msg) do { fprintf(stderr, "[ERROR] %s\n", msg); } while (0)
-#define BAIL_OUT(msg) do { LOG_ERROR(msg); TRAP(); } while (0)
+#define BAIL_OUT(msg) safe_exit(msg)
 
 
 // Function declarations
@@ -201,15 +193,22 @@ int main(int argc, char* argv[]) {
     const char *outputPngFile = NULL;
 
     // Simple CLI arg parsing
-    for (int i = 1; i < argc; ++i) {
+    int i = 1;
+    while (i < argc) {
         if (strcmp(argv[i], "--write-icc") == 0 && i + 1 < argc) {
-            injectIccFile = argv[++i];
+            injectIccFile = argv[i + 1];
+            i += 2;
         } else if (strcmp(argv[i], "--output") == 0 && i + 1 < argc) {
-            outputPngFile = argv[++i];
+            outputPngFile = argv[i + 1];
+            i += 2;
         } else if (!inputFile) {
             inputFile = argv[i];
+            i++;
         } else if (!outputIccFile) {
             outputIccFile = argv[i];
+            i++;
+        } else {
+            i++;
         }
     }
 
@@ -337,12 +336,29 @@ static FILE* OpenPngOutputFile(const std::string& outputPng)
     if (fd < 0) {
         return NULL;
     }
+
     FILE* fp = fdopen(fd, "wb");
     if (!fp) {
         close(fd);
     }
     return fp;
 #endif
+}
+
+static bool ReadBinaryStream(std::istream& in, std::vector<unsigned char>& data)
+{
+    unsigned char buffer[4096];
+
+    data.clear();
+    while (in) {
+        in.read(reinterpret_cast<char*>(buffer), sizeof(buffer));
+        std::streamsize bytesRead = in.gcount();
+        if (bytesRead > 0) {
+            data.insert(data.end(), buffer, buffer + bytesRead);
+        }
+    }
+
+    return in.eof() && !in.bad();
 }
 
 /**
@@ -362,8 +378,15 @@ bool InjectIccProfile(const std::string& inputPng,
         return false;
     }
 
-    std::vector<unsigned char> iccData((std::istreambuf_iterator<char>(iccIn)),
-                                       std::istreambuf_iterator<char>());
+    std::vector<unsigned char> iccData;
+    if (!ReadBinaryStream(iccIn, iccData)) {
+        LOG_ERROR("Failed to read ICC profile file.");
+        return false;
+    }
+    if (iccData.empty() || iccData.size() > std::numeric_limits<png_uint_32>::max()) {
+        LOG_ERROR("Invalid ICC profile size for PNG iCCP chunk.");
+        return false;
+    }
 
     FILE* fpIn = fopen(inputPng.c_str(), "rb");
     if (!fpIn) {
@@ -423,10 +446,6 @@ bool InjectIccProfile(const std::string& inputPng,
     png_bytepp row_pointers = NULL;
     png_uint_32 rowsAllocated = 0;
     if (setjmp(png_jmpbuf(write_ptr))) {
-        for (png_uint_32 y = 0; y < rowsAllocated; y++) {
-            free(row_pointers[y]);
-        }
-        free(row_pointers);
         png_destroy_read_struct(&png_ptr, &info_ptr, NULL);
         png_destroy_write_struct(&write_ptr, &write_info_ptr);
         fclose(fpIn); fclose(fpOut);
@@ -449,7 +468,6 @@ bool InjectIccProfile(const std::string& inputPng,
                  png_get_filter_type(png_ptr, info_ptr));
 
     // only now is it safe to attach ICC
-    // TODO - this should have a size check to make sure the profile is less than 2 Gig (32 bit api limit)
     png_set_iCCP(write_ptr, write_info_ptr, "icc", 0, iccData.data(), static_cast<png_uint_32>(iccData.size()));
 
     // finally write header
@@ -650,20 +668,24 @@ void PrintIccProfileInfo(const unsigned char *pProfMem, unsigned int nLen, const
     printf(" Color Space:      %s\n", Fmt.GetColorSpaceSigName(pHdr->colorSpace));
     printf(" Colorimetric PCS: %s\n", Fmt.GetColorSpaceSigName(pHdr->pcs));
     printf(" Profile Version:  %d.%d.%d\n", 
-           (pHdr->version >> 24) & 0xFF,   // Major version
-           (pHdr->version >> 20) & 0x0F,   // Minor version
-           (pHdr->version >> 16) & 0x0F);  // Sub-minor version
+           (unsigned int) ((pHdr->version >> 24) & 0xFF),   // Major version
+           (unsigned int) ((pHdr->version >> 20) & 0x0F),   // Minor version
+           (unsigned int) ((pHdr->version >> 16) & 0x0F));  // Sub-minor version
 
     delete pProfile;
 
     // If an output file is specified, save the ICC profile
     if (outputFile) {
-        FILE *outFile = fopen(outputFile, "wb");
+        FILE *outFile = OpenPngOutputFile(outputFile);
         if (!outFile) {
             LOG_ERROR("Unable to open output file for writing.");
             return;
         }
-        fwrite(pProfMem, 1, nLen, outFile);
+        if (fwrite(pProfMem, 1, nLen, outFile) != nLen) {
+            LOG_ERROR("Failed to write ICC profile.");
+            fclose(outFile);
+            return;
+        }
         fclose(outFile);
         printf("[INFO] ICC Profile saved to: %s\n", outputFile);
     }

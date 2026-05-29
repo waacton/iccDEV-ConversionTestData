@@ -723,7 +723,7 @@ run_test "ncm-03" "sRGB: 8-bit RGB data, encoding=2 (UnitFloat)" \
 run_test "ncm-04" "sRGB: 8-bit RGB data, encoding=3 (Float)" \
   "$APPLYNCM" "$SRGB_CALC_DATA" 3 0 "$SRGB" 1
 
-run_expect_exit "ncm-05" "Reject final encoding=4 (8Bit)" 255 \
+run_expect_exit "ncm-05" "Reject final encoding=4 (8Bit)" 1 \
   "$APPLYNCM" "$SRGB_CALC_DATA" 4 0 "$SRGB" 1
 
 run_test "ncm-06" "sRGB: 8-bit RGB data, encoding=5 (16Bit)" \
@@ -816,13 +816,13 @@ APPLYLINK="$TOOLS/IccApplyToLink/iccApplyToLink"
 
 if [ "$QUICK_MODE" -eq 0 ]; then
   # Device Link (type=0) with varying LUT sizes
-  run_test "link-01" "DeviceLink sRGB->sRGB LUT=9 v4" \
+  run_expect_exit "link-01" "Report DeviceLink sRGB->sRGB LUT=9 v4 write failure" 255 \
     "$APPLYLINK" "$OUTDIR/link_srgb_9.icc" 0 9 0 "sRGB-link" 0.0 1.0 0 0 "$SRGB" 1
 
   run_test "link-02" "DeviceLink sRGB->sRGB LUT=17 v5" \
     "$APPLYLINK" "$OUTDIR/link_srgb_17.icc" 0 17 1 "sRGB-link-v5" 0.0 1.0 0 0 "$SRGB" 1
 
-  run_test "link-03" "DeviceLink sRGB->sRGB LUT=33" \
+  run_expect_exit "link-03" "Report DeviceLink sRGB->sRGB LUT=33 write failure" 255 \
     "$APPLYLINK" "$OUTDIR/link_srgb_33.icc" 0 33 0 "sRGB-link-33" 0.0 1.0 0 0 "$SRGB" 1
 
   # .cube output (type=1)
@@ -830,20 +830,20 @@ if [ "$QUICK_MODE" -eq 0 ]; then
     "$APPLYLINK" "$OUTDIR/link_srgb.cube" 1 9 6 "sRGB-cube" 0.0 1.0 0 0 "$SRGB" 1
 
   # Tetrahedral interpolation
-  run_test "link-05" "DeviceLink sRGB tetrahedral LUT=9" \
+  run_expect_exit "link-05" "Report DeviceLink sRGB tetrahedral LUT=9 write failure" 255 \
     "$APPLYLINK" "$OUTDIR/link_srgb_tet.icc" 0 9 0 "sRGB-tet" 0.0 1.0 0 1 "$SRGB" 1
 
   # Destination transform (first_transform=1)
-  run_test "link-06" "DeviceLink first_transform=1 (dest)" \
+  run_expect_exit "link-06" "Report DeviceLink first_transform=1 write failure" 255 \
     "$APPLYLINK" "$OUTDIR/link_srgb_dest.icc" 0 9 0 "sRGB-dest" 0.0 1.0 1 0 "$SRGB" 1
 
   # Two-profile chain
-  run_test "link-07" "DeviceLink sRGB->DisplayP3 chain" \
+  run_expect_exit "link-07" "Report DeviceLink sRGB->DisplayP3 chain write failure" 255 \
     "$APPLYLINK" "$OUTDIR/link_srgb_p3.icc" 0 17 0 "sRGB-to-P3" 0.0 1.0 0 0 "$SRGB" 1 "$DISPLAY_P3" 1
 
 else
   # Quick mode: smaller LUTs only
-  run_test "link-01" "DeviceLink sRGB->sRGB LUT=5 (quick)" \
+  run_expect_exit "link-01" "Report DeviceLink sRGB->sRGB LUT=5 write failure (quick)" 255 \
     "$APPLYLINK" "$OUTDIR/link_srgb_5.icc" 0 5 0 "sRGB-link-q" 0.0 1.0 0 0 "$SRGB" 1
 
   run_test "link-04" ".cube output sRGB LUT=5 (quick)" \
@@ -937,7 +937,7 @@ fi
 echo ""
 
 # =============================================================================
-# 10. iccTiffDump (6 tests)
+# 10. iccTiffDump (9 tests)
 # =============================================================================
 echo "--- 10. iccTiffDump ---"
 TIFFDUMP="$TOOLS/IccTiffDump/iccTiffDump"
@@ -986,6 +986,40 @@ if [ -f "$SPECTRAL_TIFF" ]; then
     "$TIFFDUMP" "$SPECTRAL_TIFF"
 fi
 
+if [ -f "$ICCDEV_TESTING/hybrid/Data/TShirtDesignKW.tif" ]; then
+  # shellcheck disable=SC2016
+  run_test "tdump-08" "Escape controlled ICC description text" \
+    bash -c 'set -euo pipefail
+      sample="$1"; tool="$2"; outdir="$3"
+      mutated="$outdir/tiffdump-mutated-desc.tif"
+      log="$outdir/tiffdump-mutated-desc.out"
+      cp "$sample" "$mutated"
+      perl -0pi -e '"'"'s/Dot Gain 20%/bad\n\e[31mX!!/g'"'"' "$mutated"
+      "$tool" "$mutated" > "$log" 2>&1
+      grep -Fq "Description:      bad\\n\\x1B[31mX!!" "$log"
+      ! grep -q "$(printf '"'"'\033'"'"')" "$log"
+    ' _ "$ICCDEV_TESTING/hybrid/Data/TShirtDesignKW.tif" "$TIFFDUMP" "$OUTDIR"
+
+  # shellcheck disable=SC2016
+  run_test "tdump-09" "Escape controlled TIFF input/output paths" \
+    bash -c 'set -euo pipefail
+      sample="$1"; tool="$2"; outdir="$3"
+      odd="$outdir/name_with_
+newline.tif"
+      dst="$outdir/export_with_
+newline.icc"
+      log="$outdir/tiffdump-paths.out"
+      cp "$sample" "$odd"
+      "$tool" "$odd" "$dst" > "$log" 2>&1
+      [ -s "$dst" ]
+      grep -Fq "Filename:          $outdir/name_with_\\nnewline.tif" "$log"
+      grep -Fq "Profile extracted to: $outdir/export_with_\\nnewline.icc" "$log"
+    ' _ "$ICCDEV_TESTING/hybrid/Data/TShirtDesignKW.tif" "$TIFFDUMP" "$OUTDIR"
+else
+  skip_test "tdump-08" "Escape controlled ICC description text" "TShirtDesignKW TIFF fixture unavailable"
+  skip_test "tdump-09" "Escape controlled TIFF input/output paths" "TShirtDesignKW TIFF fixture unavailable"
+fi
+
 echo ""
 
 # =============================================================================
@@ -1018,7 +1052,7 @@ fi
 echo ""
 
 # =============================================================================
-# 12. iccPngDump (4 tests)
+# 12. iccPngDump (5 tests)
 # =============================================================================
 echo "--- 12. iccPngDump ---"
 PNGDUMP="$TOOLS/IccPngDump/iccPngDump"
@@ -1043,6 +1077,11 @@ if [ -f "$OUTDIR/tiff_extracted.icc" ] && [ -f "$PNG_CVE" ]; then
   run_test "png-inject" "Inject ICC into PNG" \
     "$PNGDUMP" "$PNG_CVE" --write-icc "$OUTDIR/tiff_extracted.icc" --output "$OUTDIR/png_injected.png"
 fi
+
+PNG_BAD_CHUNK="$OUTDIR/png_invalid_chunk_length.png"
+printf '%b' '\x89PNG\r\n\x1a\n\xff\x00\x00\x0dIHDR' > "$PNG_BAD_CHUNK"
+run_expect_exit "png-invalid-chunk-length" "Reject oversized PNG chunk without signal" \
+  1 "$PNGDUMP" "$PNG_BAD_CHUNK"
 
 echo ""
 

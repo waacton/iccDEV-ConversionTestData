@@ -76,6 +76,7 @@ Copyright:  ? see ICC Software License
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
+#include <climits>
 #include "IccTagEmbedIcc.h"
 #include "IccUtil.h"
 #include "IccProfile.h"
@@ -130,8 +131,7 @@ CIccTagEmbeddedProfile &CIccTagEmbeddedProfile::operator=(const CIccTagEmbeddedP
   if (&ITEP == this)
     return *this;
 
-  if (m_pProfile)
-    delete m_pProfile;
+  delete m_pProfile;
 
   if (ITEP.m_pProfile)
     m_pProfile = ITEP.m_pProfile->NewCopy();
@@ -150,8 +150,7 @@ CIccTagEmbeddedProfile &CIccTagEmbeddedProfile::operator=(const CIccTagEmbeddedP
 */
 CIccTagEmbeddedProfile::~CIccTagEmbeddedProfile()
 {
-  if (m_pProfile)
-    delete m_pProfile;
+  delete m_pProfile;
 }
 
 
@@ -165,7 +164,7 @@ CIccTagEmbeddedProfile::~CIccTagEmbeddedProfile()
 void CIccTagEmbeddedProfile::SetProfile(CIccProfile* pProfile)
 {
   //delete old profile as appropriate
-  if (pProfile != m_pProfile && m_pProfile) {
+  if (pProfile != m_pProfile) {
     delete m_pProfile;
     m_pProfile = NULL;
   }
@@ -240,8 +239,7 @@ bool CIccTagEmbeddedProfile::Read(icUInt32Number size, CIccIO *pIO, CIccProfile 
     return false;
   }
 
-  if (m_pProfile)
-    delete m_pProfile;
+  delete m_pProfile;
 
   m_pProfile = pProfile ? pProfile->NewProfile() : new CIccProfile();
 
@@ -379,7 +377,7 @@ void CIccTagEmbeddedProfile::Describe(std::string& sDescription, int /* nVerbose
     else
       sDescription += "Profile ID:         Profile ID not calculated.\n";
     sDescription += "Size:               ";
-    snprintf(buf, bufSize, "%u(0x%x) bytes\n", pHdr->size, pHdr->size);
+    snprintf(buf, bufSize, "%u(0x%x) bytes\n", (unsigned int) pHdr->size, (unsigned int) pHdr->size);
     sDescription += buf;
     sDescription += "\nHeader\n";
     sDescription += "------\n";
@@ -459,26 +457,35 @@ void CIccTagEmbeddedProfile::Describe(std::string& sDescription, int /* nVerbose
     sDescription += fillColumns("Tag", "ID", "Offset", "Size", "Pad") + "\n";
     sDescription += fillColumns("---", "--", "------", "----", "---") + "\n";
 
-    int n, closest, pad;
+    int n, pad;
+    icUInt32Number closest;
     TagEntryList::iterator i, j;
 
     // n is number of Tags in Tag Table
     for (n = 0, i = m_pProfile->m_Tags.begin(); i != m_pProfile->m_Tags.end(); i++, n++) {
-      // Find closest tag after this tag, by scanning all offsets of other tags 
+      // Find closest tag after this tag, by scanning all offsets of other tags
+      // NOTE - if this O(N^2) search is a performance problem, copy algorithm from iccDumpProfile
       closest = pHdr->size;
       for (j = m_pProfile->m_Tags.begin(); j != m_pProfile->m_Tags.end(); j++) {
-        if ((i != j) && (i->TagInfo.size <= (0xFFFFFFFF - i->TagInfo.offset)) && (j->TagInfo.offset >= i->TagInfo.offset + i->TagInfo.size) && ((int)j->TagInfo.offset <= closest)) {
+        if ((i != j) && (i->TagInfo.size <= (0xFFFFFFFF - i->TagInfo.offset)) && (j->TagInfo.offset >= i->TagInfo.offset + i->TagInfo.size) && (j->TagInfo.offset <= closest)) {
           closest = j->TagInfo.offset;
         }
       }
+      
       // Number of actual padding bytes between this tag and closest neighbour (or EOF)
       // Should be 0-3 if compliant. Negative number if tags overlap!
-      pad = closest - i->TagInfo.offset - i->TagInfo.size;
+      int64_t temp = (int64_t)closest - i->TagInfo.offset - i->TagInfo.size;
+      if (temp > (int64_t)INT_MAX)
+        pad = INT_MAX;
+      else if (temp < (int64_t)INT_MIN)
+        pad = INT_MIN;
+      else
+        pad = (int)temp;
 
       const size_t tempSize = 20;
       char sOffset[tempSize], sSize[tempSize], sPad[tempSize];
-      snprintf(sOffset, tempSize, "%u", i->TagInfo.offset);
-      snprintf(sSize, tempSize, "%u", i->TagInfo.size);
+      snprintf(sOffset, tempSize, "%u", (unsigned int)i->TagInfo.offset);
+      snprintf(sSize, tempSize, "%u", (unsigned int)i->TagInfo.size);
       snprintf(sPad, tempSize, "%d", pad);
       sDescription += fillColumns(Fmt.GetTagSigName(i->TagInfo.sig), icGetSig(sigbuf, bufSize, i->TagInfo.sig, false), sOffset, sSize, sPad) + "\n";
     }

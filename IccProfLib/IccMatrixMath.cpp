@@ -78,6 +78,7 @@
 #include "IccUtil.h"
 #include <cstring>
 #include <cstdio>
+#include <cmath>
 
 #ifdef USEICCDEVNAMESPACE
 namespace iccDEV {
@@ -138,8 +139,7 @@ CIccMatrixMath::CIccMatrixMath(const CIccMatrixMath &matrix)
 */
 CIccMatrixMath::~CIccMatrixMath()
 {
-  if (m_vals)
-    delete[] m_vals;
+  delete[] m_vals;
 }
 
 
@@ -365,8 +365,15 @@ bool CIccMatrixMath::SetRange(const icSpectralRange &srcRange, const icSpectralR
   icFloatNumber dstEnd = icF16toF(dstRange.end);
   //icFloatNumber srcDiff = srcEnd - srcStart;
   //icFloatNumber dstDiff = dstEnd - dstStart;
+
+  if (srcRange.steps <= 1 || dstRange.steps <= 1)
+    return false;
+
   icFloatNumber srcScale = (srcEnd - srcStart) / (srcRange.steps-1);
   icFloatNumber dstScale = (dstEnd - dstStart ) / (dstRange.steps - 1);
+
+  if (!std::isfinite(srcScale) || !std::isfinite(dstScale) || srcScale == 0.0f)
+    return false;
 
   icFloatNumber *data=entry(0);
   size_t dataSize = (size_t)dstRange.steps * srcRange.steps * sizeof(icFloatNumber);
@@ -376,19 +383,24 @@ bool CIccMatrixMath::SetRange(const icSpectralRange &srcRange, const icSpectralR
     icFloatNumber *r = entry(d);
     icFloatNumber w = dstStart + (icFloatNumber)d * dstScale;
     if (w<srcStart) {
-      r[0] = 1.0;
+      r[0] = 1.0f;
     }
     else if (w>=srcEnd) {
-      r[srcRange.steps-1] = 1.0;
+      r[srcRange.steps-1] = 1.0f;
     }
     else {
-      icUInt16Number p = (icUInt16Number)((w - srcStart) / srcScale);
+      icFloatNumber temp = (w - srcStart) / srcScale;
+      if (temp < 0.0f)
+        temp = 0.0f;
+      if (temp > 65535.0f)
+        temp = 65535.0f;
+      icUInt16Number p = (icUInt16Number)temp;
       icFloatNumber p2 = (w - (srcStart + p * srcScale)) / srcScale;
 
-      if (p2<0.00001) {
+      if (p2<0.00001f) {
         r[p] = 1.0f;
       }
-      else if (p2>0.99999) {
+      else if (p2>0.99999f) {
         r[p+1] = 1.0f;
       }
       else {

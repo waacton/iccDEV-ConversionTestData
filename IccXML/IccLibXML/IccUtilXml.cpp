@@ -565,9 +565,7 @@ CIccXmlArrayType<T, Tsig>::CIccXmlArrayType()
 template <class T, icTagTypeSignature Tsig>
 CIccXmlArrayType<T, Tsig>::~CIccXmlArrayType()
 {
-  if (m_pBuf) {
-    free(m_pBuf);
-  }
+  free(m_pBuf);
 }
 
 template <class T, icTagTypeSignature Tsig>
@@ -689,7 +687,7 @@ bool CIccXmlArrayType<T, Tsig>::DumpArray(std::string &xml, std::string blanks, 
         break;
 
       case icSigUInt32ArrayType:
-        snprintf(str, strSize, "%u", (icUInt32Number)buf[i]);
+        snprintf(str, strSize, "%u", (unsigned int) buf[i]);
         break;
       
       case icSigUInt64ArrayType:
@@ -760,7 +758,7 @@ icUInt32Number CIccXmlArrayType<T, Tsig>::ParseTextCountNum(const char *szText, 
     else if ( i <= num && !isspace(*szText) ) {
       const size_t lineSize = 100;
       char line[lineSize];
-      snprintf(line, lineSize, "Data '%c' in position %d is not a number. ", *szText, i);
+      snprintf(line, lineSize, "Data '%c' in position %d is not a number. ", *szText, (unsigned int) i );
       parseStr += line;
       return false;
     }
@@ -973,9 +971,7 @@ bool CIccXmlArrayType<T, Tsig>::ParseArray(T* pBuf, icUInt32Number nSize, xmlNod
 template <class T, icTagTypeSignature Tsig>
 bool CIccXmlArrayType<T, Tsig>::SetSize(icUInt32Number nSize)
 {
-  if (m_pBuf) {
-    free(m_pBuf);
-  }
+  free(m_pBuf);
   m_pBuf = (T*)malloc(nSize * sizeof(T));
   if (!m_pBuf) {
     m_nSize = 0;
@@ -1219,8 +1215,8 @@ const std::string icGetHeaderFlagsName(icUInt32Number flags, bool bUsesMCS)
   }
 
   if (flags & otherFlags) {
-    snprintf(line, lineSize, " VendorFlags=\"%08x\"", flags & otherFlags);
-    xml += line;  		
+    snprintf(line, lineSize, " VendorFlags=\"%08x\"", (unsigned int) ( flags & otherFlags) );
+    xml += line;
   }
 
   xml += "/>\n";

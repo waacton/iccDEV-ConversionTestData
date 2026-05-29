@@ -77,6 +77,38 @@
 #include "IccMpeCalc.h"
 #include "IccProfLibVer.h"
 #include "IccConnect.h"
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+#include <cstdlib>
+
+
+// ============================================================================
+
+static
+FILE* icOpenWriteTextFile(const char* szFname)
+{
+  if (!szFname || !szFname[0])
+    return stdout;
+
+#if defined(_WIN32)
+  return fopen(szFname, "wt");
+#else
+  int fd = open(szFname, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+  if (fd < 0)
+    return nullptr;
+
+  FILE* f = fdopen(fd, "wt");
+  if (!f)
+    close(fd);
+
+  return f;
+#endif
+}
+
+// ============================================================================
 
 //----------------------------------------------------
 // Function Declarations
@@ -217,9 +249,11 @@ void Usage()
   printf("     80 - MCS connection\n");
   printf("     90 + Intent - Colorimetric Only\n");
   printf("    100 + Intent - Spectral Only\n");
-  printf("  +1000 - Use Luminance based PCS adjustment\n");
-  printf(" +10000 - Use V5 sub-profile if present\n");
-  printf("+100000 - Use HToS tag if present\n");
+  printf("    +1000 - Use Luminance based PCS adjustment\n");
+  printf("   +10000 - Use V5 sub-profile if present\n");
+  printf("  +100000 - Use HToS tag if present\n");
+  printf(" +1000000 - NamedColor over black (icSigNmclSpectralOverBlackMbr 'spcb')\n");
+  printf(" +2000000 - NamedColor over gray  (icSigNmclSpectralOverGrayMbr 'spcg')\n");
 }
 
 
@@ -241,31 +275,31 @@ int main(int argc, const char* argv[])
     json cfg;
     if (!loadJsonFrom(cfg, argv[2]) || !cfg.is_object()) {
       printf("Unable to read configuration from '%s'\n", argv[2]);
-      return -1;
+      return EXIT_FAILURE;
     }
 
     if (cfg.find("dataFiles") == cfg.end() || !cfgApply.fromJson(cfg["dataFiles"])) {
       printf("Unable to parse dataFile configuration from '%s'\n", argv[2]);
-      return -1;
+      return EXIT_FAILURE;
     }
 
     if (cfg.find("profileSequence") == cfg.end() || !cfgProfiles.fromJson(cfg["profileSequence"])) {
       printf("Unable to parse profileSequence configuration from '%s'\n", argv[2]);
-      return -1;
+      return EXIT_FAILURE;
     }
 
     if (cfgApply.m_srcType == icCfgColorData) {
       if (cfgApply.m_srcFile.empty()) {
         if (!cfgData.fromJson(cfg["colorData"])) {
           printf("Unable to parse colorData configuration from '%s'\n", argv[2]);
-          return -1;
+          return EXIT_FAILURE;
         }
       }
       else {
         json data;
         if (!loadJsonFrom(data, cfgApply.m_srcFile.c_str()) || !cfgData.fromJson(data)) {
           printf("Unable to load color data from '%s'\n", cfgApply.m_srcFile.c_str());
-          return -1;
+          return EXIT_FAILURE;
         }
       }
     }
@@ -273,13 +307,13 @@ int main(int argc, const char* argv[])
       cfgData.m_srcSpace = cfgApply.m_srcSpace;
       if (cfgApply.m_srcFile.empty() || !cfgData.fromIt8(cfgApply.m_srcFile.c_str())) {
         printf("Unable to parse IT8 data file '%s'\n", cfgApply.m_srcFile.c_str());
-        return -1;
+        return EXIT_FAILURE;
       }
     }
     else if (cfgApply.m_srcType == icCfgLegacy) {
       if (!cfgData.fromLegacy(cfgApply.m_srcFile.c_str())) {
         printf("Unable to parse legacy data file '%s'\n", cfgApply.m_srcFile.c_str());
-        return -1;
+        return EXIT_FAILURE;
       }
     }
   }
@@ -310,7 +344,7 @@ int main(int argc, const char* argv[])
     int nArg = cfgApply.fromArgs(&argv[0], argc);
     if (!nArg) {
       printf("Unable to parse configuration arguments\n");
-      return -1;
+      return EXIT_FAILURE;
     }
     argv += nArg;
     argc -= nArg;
@@ -318,16 +352,16 @@ int main(int argc, const char* argv[])
     nArg = cfgProfiles.fromArgs(&argv[0], argc);
     if (!nArg) {
       printf("Unable to parse profile sequence arguments\n");
-      return -1;
+      return EXIT_FAILURE;
     }
 
     if (cfgApply.m_srcType != icCfgLegacy || !cfgData.fromLegacy(cfgApply.m_srcFile.c_str())) {
       printf("Unable to parse legacy data file '%s'\n", cfgApply.m_srcFile.c_str());
-      return -1;
+      return EXIT_FAILURE;
     }
 
     if (!exportFile.empty()) {
-      FILE* f = fopen(exportFile.c_str(), "wt");
+      FILE* f = icOpenWriteTextFile(exportFile.c_str());
       if (f) {
         json cfgJson;
         json applyJson, profilesJson;
@@ -349,8 +383,11 @@ int main(int argc, const char* argv[])
         cfgJson["profileSequence"] = profilesJson;
 
         std::string jsonText = cfgJson.dump(1);
-        fwrite(jsonText.c_str(), 1, jsonText.size(), f);
-        fclose(f);
+        size_t n = fwrite(jsonText.c_str(), 1, jsonText.size(), f);
+        if (n != jsonText.size()) {
+          printf("Error writing json config file '%s'\n", exportFile.c_str());
+        }
+        (void)fclose(f);
       }
       else {
         printf("Unable to export config file '%s'\n", exportFile.c_str());
@@ -397,7 +434,7 @@ int main(int argc, const char* argv[])
       printf("Error - %s\n", sConnectError.c_str());
     else
       printf("Error - Unable to begin profile application - Possibly invalid or incompatible profiles\n");
-    return -1;
+    return EXIT_FAILURE;
   }
 
   CIccNamedColorCmm* pNamedCmm = pConnect->GetNamedCmm();
@@ -476,12 +513,12 @@ int main(int argc, const char* argv[])
 
             if(pNamedCmm->Apply(DestPixel, szName, tint)) {
               printf("Profile application failed.\n");
-              return -1;
+              return EXIT_FAILURE;
             }
 
             if(CIccCmm::FromInternalEncoding(DestspaceSig, destEncoding, DestPixel, DestPixel, destEncoding!=icEncodeFloat)) {
               printf("Invalid final data encoding\n");
-              return -1;
+              return EXIT_FAILURE;
             }
 
             for(i = 0; i<nDestSamples; i++) {
@@ -493,7 +530,7 @@ int main(int argc, const char* argv[])
           {
             if(pNamedCmm->Apply(DestNameBuf, SrcNameBuf, tint)) {
               printf("Profile application failed.\n");
-              return -1;
+              return EXIT_FAILURE;
             }
 
             out->m_name = DestNameBuf;
@@ -503,7 +540,7 @@ int main(int argc, const char* argv[])
         case icApplyPixel2Named:
         default:
           printf("Incorrect interface.\n");
-          return -1;
+          return EXIT_FAILURE;
       }      
     }
     else {
@@ -515,7 +552,7 @@ int main(int argc, const char* argv[])
 
       if(CIccCmm::ToInternalEncoding(SrcspaceSig, srcEncoding, SrcPixel, Pixel, bClip)) {
         printf("Invalid source data encoding\n");
-        return -1;
+        return EXIT_FAILURE;
       }
 
       switch(pNamedCmm->GetInterface()) {
@@ -524,16 +561,16 @@ int main(int argc, const char* argv[])
             if (pMruCmm) {
               if (pMruCmm->Apply(DestPixel, SrcPixel)) {
                 printf("Profile application failed.\n");
-                return -1;
+                return EXIT_FAILURE;
               }
             }
             else if(pNamedCmm->Apply(DestPixel, SrcPixel)) {
               printf("Profile application failed.\n");
-              return -1;
+              return EXIT_FAILURE;
             }
             if(CIccCmm::FromInternalEncoding(DestspaceSig, destEncoding, DestPixel, DestPixel)) {
               printf("Invalid final data encoding\n");
-              return -1;
+              return EXIT_FAILURE;
             }
 
             for(i = 0; i<nDestSamples; i++) {
@@ -545,7 +582,7 @@ int main(int argc, const char* argv[])
           {
             if(pNamedCmm->Apply(DestNameBuf, SrcPixel)) {
               printf("Profile application failed.\n");
-              return -1;
+              return EXIT_FAILURE;
             }
             out->m_name = DestNameBuf;
             break;
@@ -554,7 +591,7 @@ int main(int argc, const char* argv[])
         case icApplyNamed2Named:
         default:
           printf("Incorrect interface.\n");
-          return -1;
+          return EXIT_FAILURE;
       }      
     }
 
@@ -595,11 +632,10 @@ int main(int argc, const char* argv[])
     printf("Unsupported output format\n");
     delete pMruCmm;
 
-    return -1;
+    return EXIT_FAILURE;
   }
 
-  if (pMruCmm)
-    delete pMruCmm;
+  delete pMruCmm;
 
   return 0;
 }

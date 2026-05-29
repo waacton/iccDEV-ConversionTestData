@@ -15,9 +15,9 @@ allowed-tools:
 # Maintainer CI and CTest Workflow
 
 Use this skill only for iccDEV maintainer-owned infrastructure changes:
-`.github/**`, CTest registration, CPack and release packaging, sanitizer helper
-policy, CodeQL/workflow governance, vcpkg release verification, and security
-automation.
+`.github/**`, `Dockerfile*`, CTest registration, CPack and release packaging,
+sanitizer helper policy, CodeQL/workflow governance, vcpkg release verification,
+and security automation.
 
 General contributor requests should be redirected to issue or PR descriptions
 unless an iccDEV maintainer explicitly approved the infrastructure change.
@@ -33,6 +33,7 @@ Choose the smallest maintainer-owned surface that proves the behavior:
 | Add focused Linux regression | `.github/scripts/*.sh` | `.github/ci/regression/README.md` or `docs/ctest.md` |
 | Register CTest suite | `Build/Cmake/Testing/CMakeLists.txt` | `docs/ctest.md` |
 | Change workflow gate | `.github/workflows/*.yml` | `docs/regression-workflow-governance.md` |
+| Change maintainer Dockerfile | `Dockerfile*` | `docs/build.md` and `docs/regression-workflow-governance.md` |
 | Change sanitizer policy | `Build/Cmake/CMakeLists.txt`, `.github/scripts/sanitize-*` | `.github/instructions/*` |
 | Change CPack/release packaging | `Build/Cmake/**`, release workflows | `docs/build.md` or release docs |
 | Change vcpkg release verification | `ports/iccdev/**`, vcpkg workflows | vcpkg skill/docs |
@@ -44,13 +45,20 @@ when practical.
 
 - `check` must exist on every platform.
 - `check` and workflow CTest execution must use `--no-tests=error`.
-- Linux suite count assertions currently expect `Total Tests: 22`.
+- Do not add hard-coded CTest suite totals to workflows, docs, or maintainer
+  instructions; keep suite lists descriptive and let CTest discovery report the
+  current total.
 - Adding checks inside `iccdev-tool-coverage-baseline.sh` does not change that
   count; validate the direct script and `ctest -R '^iccdev\.tool-coverage$'`.
-- Windows currently registers 5 CTest suites.
-- Generated-profile gates currently validate 207 ICC profiles.
-- JSON round-trip profile generation validates 129 profile parses.
-- WASM parity currently expects 207 generated ICC profiles.
+- Windows full builds include focused executable regressions, batch-backed
+  suites, dump/profile smoke coverage, shared-export coverage, and PAWG report
+  coverage.
+- Generated-profile gates currently validate 208 ICC profiles.
+- Windows and JSON profile generation validate 130 profile parses.
+- WASM parity currently expects 208 generated ICC profiles.
+- WASM generated-profile count changes must update both the workflow inputs and
+  `Build/Cmake/wasm-package/regression.js`; the packaged script is the fallback
+  source used by local and release parity runs.
 - Windows batch CTest runs must use the disposable Testing copy under the build
   tree and must not dirty the source `Testing/` directory.
 - Windows executable tests must receive runtime DLL directories through
@@ -101,6 +109,18 @@ actionlint -no-color .github/workflows/<workflow>.yml
 For CPack, install/export, vcpkg, or release packaging changes, run the nearest
 packaging smoke test and inspect logs for missing files, duplicate install
 manifest entries, CRT mismatch warnings, and skipped smoke coverage.
+
+For `Dockerfile*` changes:
+
+```bash
+docker build -t iccdev-container-check -f <Dockerfile> .
+docker run --rm iccdev-container-check <smoke-command>
+```
+
+For `Dockerfile.ci-regression`, also run a no-cache build and smoke
+`clang-18`, `clang++-18`, `cmake`, and `/usr/bin/time`. Publishing requires the
+`ghcr-publish` environment branch policy to allow the branch before deployment
+approval, followed by pinning the new digest in `ci-iccdev-tool-tests.yml`.
 
 ## GitHub Validation
 

@@ -76,6 +76,7 @@
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
+#include <new>
 #include "IccTagComposite.h"
 #include "IccStructBasic.h"
 #include "IccUtil.h"
@@ -243,9 +244,7 @@ CIccTagStruct::~CIccTagStruct()
 
   delete m_ElemEntries;
   delete m_ElemVals;
-
-  if (m_pStruct)
-    delete m_pStruct;
+  delete m_pStruct;
 }
 
 
@@ -261,8 +260,7 @@ CIccTagStruct::~CIccTagStruct()
  ******************************************************************************/
 bool CIccTagStruct::SetTagStructType(icStructSignature sig)
 {
-  if (m_pStruct)
-    delete m_pStruct;
+  delete m_pStruct;
 
   m_sigStructType = sig;
   m_pStruct = CIccStructCreator::CreateStruct(m_sigStructType, this);
@@ -287,7 +285,9 @@ CIccTagStruct* CIccTagStruct::ParseMem(icUInt8Number *pMem, icUInt32Number size)
   if (!IO.Attach(pMem, size))
     return NULL;
 
-  CIccTagStruct *pTags = new CIccTagStruct;
+  CIccTagStruct *pTags = new (std::nothrow) CIccTagStruct;
+  if (!pTags)
+    return NULL;
 
   if (!pTags->Read(size, &IO)) {
     delete pTags;
@@ -573,8 +573,7 @@ void CIccTagStruct::Cleanup()
   m_ElemEntries->clear();
   m_ElemVals->clear();
 
-  if (m_pStruct)
-    delete m_pStruct;
+  delete m_pStruct;
   m_pStruct = NULL;
   m_sigStructType = icSigUndefinedStruct;
 }
@@ -1135,8 +1134,7 @@ CIccTagArray::~CIccTagArray()
 ******************************************************************************/
 bool CIccTagArray::SetTagArrayType(icArraySignature sig)
 {
-  if (m_pArray)
-    delete m_pArray;
+  delete m_pArray;
 
   m_sigArrayType = sig;
   m_pArray = CIccArrayCreator::CreateArray(m_sigArrayType, this);
@@ -1198,13 +1196,13 @@ void CIccTagArray::Describe(std::string &sDescription, int nVerboseness)
   for (i=0; i<m_nSize; i++) {
     if (i)
       sDescription += "\n";
-    snprintf(buf, bufSize, "BEGIN INDEX[%u]\n", i);
+    snprintf(buf, bufSize, "BEGIN INDEX[%u]\n", (unsigned int) i);
     sDescription +=  buf;
     
     if (m_TagVals[i].ptr) {
       m_TagVals[i].ptr->Describe(sDescription, nVerboseness);
     }
-    snprintf(buf, bufSize, "END INDEX[%u]\n", i);
+    snprintf(buf, bufSize, "END INDEX[%u]\n", (unsigned int) i);
     sDescription += buf;
   }
 
@@ -1275,7 +1273,9 @@ bool CIccTagArray::Read(icUInt32Number size, CIccIO *pIO)
     return false;
 
   if (count) {
-    icPositionNumber *tagPos = new icPositionNumber[count];
+    icPositionNumber *tagPos = new (std::nothrow) icPositionNumber[count];
+    if (!tagPos)
+      return false;
 
     if (!SetSize(count)) {
       delete[] tagPos;
@@ -1381,7 +1381,7 @@ bool CIccTagArray::Write(CIccIO *pIO)
       if (!pIO->Write32(&zero) || !pIO->Write32(&zero))
         return false;
     }
-    icPositionNumber *tagPos = new icPositionNumber[m_nSize];
+    icPositionNumber *tagPos = new (std::nothrow) icPositionNumber[m_nSize];
     if (!tagPos)
       return false;
 
@@ -1444,7 +1444,7 @@ bool CIccTagArray::Write(CIccIO *pIO)
 bool CIccTagArray::SetSize(icUInt32Number nSize)
 {
   if (!m_nSize) {
-    m_TagVals = new IccTagPtr[nSize];
+    m_TagVals = new (std::nothrow) IccTagPtr[nSize];
     if (!m_TagVals) {
       m_nSize = 0;
       return false;
@@ -1458,7 +1458,7 @@ bool CIccTagArray::SetSize(icUInt32Number nSize)
     // We need to grow the array, and keep the existing values.
     // This would be much easier with a std::vector
     auto oldArray = m_TagVals;
-    m_TagVals = new IccTagPtr[nSize];
+    m_TagVals = new (std::nothrow) IccTagPtr[nSize];
     if (!m_TagVals) {
       delete[] oldArray;
       m_nSize = 0;
@@ -1552,15 +1552,12 @@ void CIccTagArray::Cleanup()
     }
   }
 
-  if (m_TagVals)
-    delete[] m_TagVals;
+  delete[] m_TagVals;
   m_TagVals = nullptr;
 
   m_nSize = 0;
 
-  if (m_pArray)
-    delete m_pArray;
-
+  delete m_pArray;
   m_pArray = NULL;
   m_sigArrayType = icSigUndefinedArray;
 }

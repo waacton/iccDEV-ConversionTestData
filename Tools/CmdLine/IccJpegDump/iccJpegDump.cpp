@@ -90,6 +90,12 @@
   #include <arpa/inet.h>
 #endif
 
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 
 // ============================================================================
 // Platform Trap Macro
@@ -136,6 +142,45 @@ void Usage() {
     printf("    - Extract ICC profile from JPEG (APP2 or EXIF-based) if present.\n");
     printf("  iccJpegDump <input.jpg> --write-icc <profile.icc> --output <output.jpg>\n");
     printf("    - Inject ICC profile into JPEG image.\n");
+}
+
+// ============================================================================
+
+static
+FILE* icOpenWriteBinaryFile(const char* szFname)
+{
+  if (!szFname || !szFname[0])
+    return stdout;
+
+#if defined(_WIN32)
+  return fopen(szFname, "wb");
+#else
+  int fd = open(szFname, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+  if (fd < 0)
+    return nullptr;
+
+  FILE* f = fdopen(fd, "wb");
+  if (!f)
+    close(fd);
+
+  return f;
+#endif
+}
+
+static bool ReadBinaryStream(std::istream& input, std::vector<unsigned char>& data)
+{
+    data.clear();
+    unsigned char buffer[4096];
+
+    while (input) {
+        input.read(reinterpret_cast<char*>(buffer), sizeof(buffer));
+        std::streamsize count = input.gcount();
+        if (count > 0) {
+            data.insert(data.end(), buffer, buffer + static_cast<size_t>(count));
+        }
+    }
+
+    return input.eof();
 }
 
 // ============================================================================
@@ -220,8 +265,11 @@ bool ExtractIccFromJpeg(const char* jpegPath, const char* iccOutPath) {
             return false;
         }
 
-        std::vector<unsigned char> raw((std::istreambuf_iterator<char>(file)),
-                                       std::istreambuf_iterator<char>());
+        std::vector<unsigned char> raw;
+        if (!ReadBinaryStream(file, raw)) {
+            LOG_ERROR("Fallback read failed.");
+            return false;
+        }
 
         for (size_t i = 0; i + 4 < raw.size(); ++i) {
             if (memcmp(&raw[i], "acsp", 4) == 0) {
@@ -240,9 +288,10 @@ done:
         return false;
     }
 
-    FILE* out = fopen(iccOutPath, "wb");
+    FILE* out = icOpenWriteBinaryFile(iccOutPath);
     if (!out) safe_exit("Failed to open output ICC file.");
-    fwrite(iccData.data(), 1, iccData.size(), out);
+    bool failed = fwrite(iccData.data(), 1, iccData.size(), out) != iccData.size();
+    if (failed) safe_exit("Failed to write output ICC file.");
     fclose(out);
 
     printf("[INFO] ICC profile extracted to: %s\n", iccOutPath);
@@ -273,7 +322,7 @@ done:
 // ============================================================================
 bool InjectIccIntoJpeg(const char* inputPath, const char* iccPath, const char* outputPath) {
     FILE* in = fopen(inputPath, "rb");
-    FILE* out = fopen(outputPath, "wb");
+    FILE* out = icOpenWriteBinaryFile(outputPath);
     std::ifstream icc(iccPath, std::ios::binary);
 
     if (!in || !out || !icc.is_open())
@@ -282,8 +331,10 @@ bool InjectIccIntoJpeg(const char* inputPath, const char* iccPath, const char* o
     // ------------------------------------------------------------------------
     // Read ICC profile into memory
     // ------------------------------------------------------------------------
-    std::vector<unsigned char> iccData((std::istreambuf_iterator<char>(icc)),
-                                        std::istreambuf_iterator<char>());
+    std::vector<unsigned char> iccData;
+    if (!ReadBinaryStream(icc, iccData)) {
+        safe_exit("Failed to read ICC profile.");
+    }
 
     // ------------------------------------------------------------------------
     // Verify and copy SOI marker (0xFFD8)

@@ -76,7 +76,7 @@
 #include "TiffImg.h"
 
 
-#ifdef _DEBUG
+#if false && defined(_DEBUG)
 #undef THIS_FILE
 static char THIS_FILE[]=__FILE__;
 #define new DEBUG_NEW
@@ -179,6 +179,9 @@ bool CTiffImg::Create(const char *szFname, unsigned int nWidth, unsigned int nHe
 {
   Close();
   m_bRead = false;
+
+  if (bCompress && nBPS != 8 && nBPS != 16 && nBPS != 32)
+    return false;
 
   m_nWidth = nWidth;
   m_nHeight = nHeight;
@@ -283,7 +286,7 @@ bool CTiffImg::Create(const char *szFname, unsigned int nWidth, unsigned int nHe
 
     m_pStripBuf = static_cast<unsigned char*>(malloc((size_t)m_nStripSize*m_nStripSamples));
 
-    if (!m_pStripBuf) {
+    if (m_nRowsPerStrip == 0 || !m_pStripBuf) {
       Close();
       return false;
     }
@@ -374,7 +377,7 @@ bool CTiffImg::Open(const char *szFname)
       return false;
     }
     m_nBytesPerSample = m_nBitsPerSample / 8;
-    if (!checkedUInt32Product(m_nWidth, m_nBytesPerSample, m_nBytesPerStripLine)) {
+    if (m_nRowsPerStrip == 0 || !checkedUInt32Product(m_nWidth, m_nBytesPerSample, m_nBytesPerStripLine)) {
       Close();
       return false;
     }

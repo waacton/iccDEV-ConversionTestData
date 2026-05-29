@@ -366,6 +366,12 @@ write("inline-clut-truncated", {
     }]
 })
 
+write("curve-gamma-out-of-range", {
+    "type": "curveType",
+    "curveType": "gamma",
+    "gamma": 2.19921880909168E8
+})
+
 write("mpe-matrix-huge-channels", {
     "type": "multiProcessElementType",
     "inputChannels": 1,
@@ -374,6 +380,18 @@ write("mpe-matrix-huge-channels", {
         "type": "MatrixElement",
         "inputChannels": 65535,
         "outputChannels": 65535,
+        "matrix": []
+    }]
+})
+
+write("mpe-matrix-outputchannels-out-of-int-range", {
+    "type": "multiProcessElementType",
+    "inputChannels": 1,
+    "outputChannels": 1,
+    "elements": [{
+        "type": "MatrixElement",
+        "inputChannels": 3,
+        "outputChannels": 3.3333333333333333E25,
         "matrix": []
     }]
 })
@@ -531,7 +549,9 @@ echo ""
 
 run_reject_test "mpe-calculator-missing-main" "$OUTDIR/mpe-calculator-missing-main.json" "Missing mainFunction in CalculatorElement"
 run_reject_test "inline-clut-truncated" "$OUTDIR/inline-clut-truncated.json" "Inline CLUT data count does not match CLUT size"
+run_reject_test "curve-gamma-out-of-range" "$OUTDIR/curve-gamma-out-of-range.json" "Invalid gamma in curveType"
 run_reject_test "mpe-matrix-huge-channels" "$OUTDIR/mpe-matrix-huge-channels.json" "Invalid inputChannels or outputChannels in MatrixElement"
+run_reject_test "mpe-matrix-outputchannels-out-of-int-range" "$OUTDIR/mpe-matrix-outputchannels-out-of-int-range.json" "Invalid inputChannels or outputChannels in MatrixElement"
 run_reject_test "mpe-matrix-short-data" "$OUTDIR/mpe-matrix-short-data.json" "matrix count does not match MatrixElement size"
 run_reject_test "spectral-white-short" "$OUTDIR/spectral-white-short.json" "whiteData count does not match spectral element size"
 run_reject_test "spectral-matrix-huge-channels" "$OUTDIR/spectral-matrix-huge-channels.json" "Invalid inputChannels or outputChannels in spectral matrix element"

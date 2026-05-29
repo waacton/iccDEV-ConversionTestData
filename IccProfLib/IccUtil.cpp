@@ -124,7 +124,7 @@ ICCPROFLIB_API const char* icMsgValidateInformation = "Information - ";
   else
     nptr = malloc(size);
 
-  if (!nptr && ptr)
+  if (!nptr)
     free(ptr);
 
   return nptr;
@@ -317,7 +317,7 @@ void icColorIndexName(icChar *szName, size_t nameSize, icColorSpaceSignature csS
         szSig[i]='\0';
     }
     if (nColors==1) {
-      strcpy(szName, szSig);
+      strncpy(szName, szSig, std::min( size_t(5), nameSize ) );
     }
     else if ((size_t)nColors == strlen(szSig)) {
       snprintf(szName, nameSize, "%s_%c", szSig, szSig[nIndex]);
@@ -327,7 +327,7 @@ void icColorIndexName(icChar *szName, size_t nameSize, icColorSpaceSignature csS
     }
   }
   else if (nColors==1) {
-    strcpy(szName, szUnknown);
+    strncpy(szName, szUnknown, std::min( size_t(5), nameSize ));
   }
   else {
     snprintf(szName, nameSize, "%s_%d", szUnknown, nIndex+1);
@@ -363,8 +363,16 @@ void icColorValue(icChar *szValue, size_t nameSize, icFloatNumber nValue,
 static bool icIsS15Fixed16NumberNear(icS15Fixed16Number F, icFloatNumber D)
 {
   //icFloatNumber v=icFtoD(F);
+  
+  if (std::isnan(D) || std::isinf(D))
+    return false;
 
-  return (icUInt32Number)(F*10000.0f + 0.5) == (icUInt32Number)(D*10000.0f + 0.5);
+  icFloatNumber ff = floorf(F*10000.0f/65536.0f + 0.5f);
+  icFloatNumber df = floorf(D*10000.0f + 0.5f);
+  return ff == df;
+
+  // original (wrong) code was
+  //return (icUInt32Number)(F*10000.0f + 0.5) == (icUInt32Number)(D*10000.0f + 0.5);
 }
 
 bool icIsIllumD50(icXYZNumber xyz)
@@ -622,7 +630,9 @@ icU8Fixed8Number icDtoUCF(icFloatNumber num)
 {
   icU8Fixed8Number rv;
 
-  if (std::isnan(num))
+  if (std::isinf(num))
+    num = 255.0;
+  else if (std::isnan(num))
     num = 0;
   else if (num<0)
     num = 0;
@@ -763,8 +773,10 @@ icFloatNumber icU8toF(icUInt8Number num)
 icUInt16Number icFtoU16(icFloatNumber num)
 {
   icUInt16Number rv;
-
-  if (std::isnan(num))
+  
+  if (std::isinf(num))
+    num = 1.0;
+  else if (std::isnan(num))
     num = 0;
   else if (num<0)
     num = 0;
@@ -788,11 +800,11 @@ icUInt8Number icABtoU8(icFloatNumber num)
   icFloatNumber v = num + 128.0f;
   
   if (std::isnan(num))
-    v = 128.0f;
+    return 128.0f;
   else if (v<0)
-    v=0;
+    return 0;
   else if (v>255)
-    v=255;
+    return 255;
 
   return (icUInt8Number)(v + 0.5);
 }
@@ -805,14 +817,19 @@ icFloatNumber icU8toAB(icUInt8Number num)
 ICCPROFLIB_API icFloatNumber icD50XYZ[3] = { 0.9642f, 1.0000f, 0.8249f };
 ICCPROFLIB_API icFloatNumber icD50XYZxx[3] = { 96.42f, 100.00f, 82.49f };
 
+static icFloatNumber icSafeXYZRatio(icFloatNumber value, icFloatNumber white)
+{
+  return icNotZero(white) ? value / white : 0.0f;
+}
+
 void icNormXyz(icFloatNumber *XYZ, icFloatNumber *WhiteXYZ)
 {
   if (!WhiteXYZ)
     WhiteXYZ = icD50XYZ;
 
-  XYZ[0] = XYZ[0] / WhiteXYZ[0];
-  XYZ[1] = XYZ[1] / WhiteXYZ[1];
-  XYZ[2] = XYZ[2] / WhiteXYZ[2];
+  XYZ[0] = icSafeXYZRatio(XYZ[0], WhiteXYZ[0]);
+  XYZ[1] = icSafeXYZRatio(XYZ[1], WhiteXYZ[1]);
+  XYZ[2] = icSafeXYZRatio(XYZ[2], WhiteXYZ[2]);
 }
 
 void icDeNormXyz(icFloatNumber *XYZ, icFloatNumber *WhiteXYZ)
@@ -876,9 +893,9 @@ void icXYZtoLab(icFloatNumber *Lab, const icFloatNumber *XYZ /*=NULL*/, const ic
   if (!WhiteXYZ)
     WhiteXYZ = icD50XYZ;
 
-  Xn = icCubeth(XYZ[0] / WhiteXYZ[0]);
-  Yn = icCubeth(XYZ[1] / WhiteXYZ[1]);
-  Zn = icCubeth(XYZ[2] / WhiteXYZ[2]);
+  Xn = icCubeth(icSafeXYZRatio(XYZ[0], WhiteXYZ[0]));
+  Yn = icCubeth(icSafeXYZRatio(XYZ[1], WhiteXYZ[1]));
+  Zn = icCubeth(icSafeXYZRatio(XYZ[2], WhiteXYZ[2]));
 
   Lab[0] = (icFloatNumber)(116.0 * Yn - 16.0);
   Lab[1] = (icFloatNumber)(500.0 * (Xn - Yn));
@@ -1089,7 +1106,7 @@ const icChar *icGetSig(icChar *pBuf, size_t bufSize, icUInt32Number nSig, bool b
   }
 
   if (bGetHexVal)
-    snprintf(pBuf+5, bufSize-5, "' = %08X", nSig);  // 17 characcter plus NULL
+    snprintf(pBuf+5, bufSize-5, "' = %08X", (unsigned int) nSig);  // 17 characcter plus NULL
   else
     snprintf(pBuf+5, bufSize-5, "'");   // 6 characters plus NULL
 
@@ -1129,7 +1146,7 @@ const icChar *icGetSigStr(icChar *pBuf, size_t bufSize, icUInt32Number nSig)
   }
 
   if (bGetHexVal)
-    snprintf(pBuf, bufSize, "%08Xh", nSig);
+    snprintf(pBuf, bufSize, "%08Xh", (unsigned int) nSig);
   else
     pBuf[4] = '\0';
 
@@ -1163,7 +1180,7 @@ const icChar *icGetColorSig(icChar *pBuf, size_t bufSize, icUInt32Number nSig, b
       pBuf[0]='\"';
       pBuf[1] = (icUInt8Number)(sig>>24);
       pBuf[2] = (icUInt8Number)(sig>>16);
-      snprintf(pBuf+3, bufSize-3, "%04X\"", icNumColorSpaceChannels(nSig));
+      snprintf(pBuf+3, bufSize-3, "%04X\"", (unsigned int) icNumColorSpaceChannels(nSig));
       return pBuf;
     
     default:
@@ -1184,9 +1201,9 @@ const icChar *icGetColorSig(icChar *pBuf, size_t bufSize, icUInt32Number nSig, b
       }
 
       if (bGetHexVal)
-        snprintf(pBuf+5, bufSize-5, "' = %08X", nSig);
+        snprintf(pBuf+5, bufSize-5, "' = %08X", (unsigned int) nSig);
       else if (bNeedHexVal) {
-        snprintf(pBuf, bufSize, "%08Xh", nSig);
+        snprintf(pBuf, bufSize, "%08Xh", (unsigned int) nSig);
       }
       else
         snprintf(pBuf+5, bufSize-5, "'");
@@ -1222,7 +1239,7 @@ const icChar *icGetColorSigStr(icChar *pBuf, size_t bufSize, icUInt32Number nSig
 
       pBuf[0] = (icUInt8Number)(sig>>24);
       pBuf[1] = (icUInt8Number)(sig>>16);
-      snprintf(pBuf+2, bufSize-2, "%04X", icNumColorSpaceChannels(nSig));
+      snprintf(pBuf+2, bufSize-2, "%04X", (unsigned int) icNumColorSpaceChannels(nSig));
       return pBuf;
 
     default:
@@ -1248,7 +1265,7 @@ const icChar *icGetColorSigStr(icChar *pBuf, size_t bufSize, icUInt32Number nSig
         }
 
         if (bGetHexVal)
-          snprintf(pBuf, bufSize, "%08Xh", nSig);
+          snprintf(pBuf, bufSize, "%08Xh", (unsigned int) nSig);
         else
           pBuf[4] = '\0';
       }
@@ -1359,6 +1376,7 @@ icUInt32Number icGetSigVal(const icChar *pBuf)
                               (((unsigned long)(unsigned char)pBuf[3])));
 
     case 6:  //Channel based color signatures
+      // can't get this format to agree between platforms
       sscanf(pBuf+2, "%x", &v);
 
       return (icUInt32Number)((((unsigned long)(unsigned char)pBuf[0])<<24) +
@@ -1367,6 +1385,7 @@ icUInt32Number icGetSigVal(const icChar *pBuf)
 
     case 8:
     case 9:
+      // can't get this format to agree between platforms
       sscanf(pBuf, "%x", &v);
       return v;
   }
@@ -1507,7 +1526,7 @@ const icChar *CIccInfo::GetVersionName(icUInt32Number val)
 {
   if (!icIsValidBcdByte((val >> 24) & 0xff) ||
       !icIsValidBcdByte((val >> 16) & 0xff)) {
-    snprintf(m_szStr, m_bufSize, "Invalid BCD version 0x%08X", val);
+    snprintf(m_szStr, m_bufSize, "Invalid BCD version 0x%08X", (unsigned int) val);
     return m_szStr;
   }
 
@@ -1523,7 +1542,7 @@ const icChar *CIccInfo::GetSubClassVersionName(icUInt32Number val)
 {
   if (!icIsValidBcdByte((val >> 8) & 0xff) ||
       !icIsValidBcdByte(val & 0xff)) {
-    snprintf(m_szStr, m_bufSize, "Invalid BCD subclass version 0x%04X", val & 0xffff);
+    snprintf(m_szStr, m_bufSize, "Invalid BCD subclass version 0x%04X", (unsigned int) (val & 0xffff) );
     return m_szStr;
   }
 
@@ -1822,33 +1841,33 @@ const icChar *CIccInfo::GetColorSpaceSigName(icColorSpaceSignature sig)
   default:
     switch(icGetColorSpaceType(sig)) {
     case icSigNChannelData:
-      snprintf(m_szStr, m_bufSize, "0x%04XChannelData", icNumColorSpaceChannels(sig));
+      snprintf(m_szStr, m_bufSize, "0x%04XChannelData", (unsigned int) icNumColorSpaceChannels(sig));
       return m_szStr;
 
     case icSigReflectanceSpectralData:
-      snprintf(m_szStr, m_bufSize, "0x%04XChannelReflectanceData", icNumColorSpaceChannels(sig));
+      snprintf(m_szStr, m_bufSize, "0x%04XChannelReflectanceData", (unsigned int) icNumColorSpaceChannels(sig));
       return m_szStr;
 
     case icSigTransmisionSpectralData:
-      snprintf(m_szStr, m_bufSize, "0x%04XChannelTransmissionData", icNumColorSpaceChannels(sig));
+      snprintf(m_szStr, m_bufSize, "0x%04XChannelTransmissionData", (unsigned int) icNumColorSpaceChannels(sig));
       return m_szStr;
 
     case icSigRadiantSpectralData:
-      snprintf(m_szStr, m_bufSize, "0x%04XChannelRadiantData", icNumColorSpaceChannels(sig));
+      snprintf(m_szStr, m_bufSize, "0x%04XChannelRadiantData", (unsigned int) icNumColorSpaceChannels(sig));
       return m_szStr;
 
     case icSigBiSpectralReflectanceData:
-      snprintf(m_szStr, m_bufSize, "0x%04XChannelBiDirReflectanceData", icNumColorSpaceChannels(sig));
+      snprintf(m_szStr, m_bufSize, "0x%04XChannelBiDirReflectanceData", (unsigned int) icNumColorSpaceChannels(sig));
       return m_szStr;
 
     case icSigSparseMatrixReflectanceData:
-      snprintf(m_szStr, m_bufSize, "0x%04XChannelSparseMatrixReflectanceData", icNumColorSpaceChannels(sig));
+      snprintf(m_szStr, m_bufSize, "0x%04XChannelSparseMatrixReflectanceData", (unsigned int) icNumColorSpaceChannels(sig));
       return m_szStr;
 
     default:
       icUInt32Number nChan = icGetSpaceSamples(sig);
       if (nChan>0) {
-        snprintf(m_szStr, m_bufSize, "0x%XColorData", nChan);
+        snprintf(m_szStr, m_bufSize, "0x%XColorData", (unsigned int) nChan);
         return m_szStr;
       }
       return GetUnknownName(sig);
@@ -1863,27 +1882,27 @@ const icChar *CIccInfo::GetSpectralColorSigName(icColorSpaceSignature sig)
     return "NoSpectralData";
 
    case icSigNChannelData:
-     snprintf(m_szStr, m_bufSize, "0x%04XChannelData", icNumColorSpaceChannels(sig));
+     snprintf(m_szStr, m_bufSize, "0x%04XChannelData", (unsigned int) icNumColorSpaceChannels(sig));
      return m_szStr;
 
    case icSigReflectanceSpectralData:
-     snprintf(m_szStr, m_bufSize, "0x%04XChannelReflectanceData", icNumColorSpaceChannels(sig));
+     snprintf(m_szStr, m_bufSize, "0x%04XChannelReflectanceData", (unsigned int) icNumColorSpaceChannels(sig));
      return m_szStr;
 
    case icSigTransmisionSpectralData:
-     snprintf(m_szStr, m_bufSize, "0x%04XChannelTransmissionData", icNumColorSpaceChannels(sig));
+     snprintf(m_szStr, m_bufSize, "0x%04XChannelTransmissionData", (unsigned int) icNumColorSpaceChannels(sig));
      return m_szStr;
 
    case icSigRadiantSpectralData:
-     snprintf(m_szStr, m_bufSize, "0x%04XChannelRadiantData", icNumColorSpaceChannels(sig));
+     snprintf(m_szStr, m_bufSize, "0x%04XChannelRadiantData", (unsigned int) icNumColorSpaceChannels(sig));
      return m_szStr;
 
    case icSigBiSpectralReflectanceData:
-     snprintf(m_szStr, m_bufSize, "0x%04XChannelBiSpectralReflectanceData", icNumColorSpaceChannels(sig));
+     snprintf(m_szStr, m_bufSize, "0x%04XChannelBiSpectralReflectanceData", (unsigned int) icNumColorSpaceChannels(sig));
      return m_szStr;
 
    case icSigSparseMatrixReflectanceData:
-     snprintf(m_szStr, m_bufSize, "0x%04XChannelSparseMatrixReflectanceData", icNumColorSpaceChannels(sig));
+     snprintf(m_szStr, m_bufSize, "0x%04XChannelSparseMatrixReflectanceData", (unsigned int) icNumColorSpaceChannels(sig));
      return m_szStr;
 
   default:
@@ -2514,11 +2533,12 @@ icValidateStatus CIccInfo::CheckData(std::string &sReport, const icDateTimeNumbe
 {
   icValidateStatus rv = icValidateOK;
 
-  struct tm *newtime;
+  struct tm timeBuf;
+  struct tm *newtime = &timeBuf;
   time_t long_time;
 
   time( &long_time );                /* Get time as long integer. */
-  newtime = localtime( &long_time );
+  newtime = localtime_r( &long_time, newtime );
 
   const size_t bufSize = 128;
   icChar buf[bufSize];
@@ -2705,7 +2725,7 @@ CIccPixelBuf::CIccPixelBuf(int nChan/* =icDefaultPixelBufSize */) : m_buf{}
 
 CIccPixelBuf::~CIccPixelBuf()
 {
-  if (m_pixel && m_pixel!=m_buf)
+  if (m_pixel!=m_buf)
     delete [] m_pixel;
 }
 
@@ -2738,31 +2758,14 @@ CIccUTF16String::CIccUTF16String(const icUInt16Number *uzStr)
 
 CIccUTF16String::CIccUTF16String(const char *szStr)
 {
-  size_t sizeSrc = strlen(szStr);
-  if (sizeSrc) {
-    m_alloc = AllocSize(sizeSrc * 2);
-    m_str = (UTF16*)calloc(m_alloc, sizeof(icUInt16Number));
-    if (!m_str) {
-      m_alloc = 0;
-      m_len = 0;
-      return;
-    }
-    UTF16 *szDest = m_str;
-    icConvertUTF8toUTF16((const UTF8**)&szStr, (const UTF8*)&szStr[sizeSrc], &szDest, &szDest[m_alloc], lenientConversion);
-    if (m_str[0] == 0xfeff) {
-      size_t i;
-      for (i = 1; m_str[i]; i++) m_str[i-1] = m_str[i];
-      m_str[i-1] = 0;
-    }
-    m_len = WStrlen(m_str);
-  } else {
-    m_alloc = 64;
-    m_len = 0;
-    m_str = (icUInt16Number*)calloc(m_alloc, sizeof(icUInt16Number));
-    if (!m_str) {
-      m_alloc = 0;
-    }
+  m_alloc = 64;
+  m_len = 0;
+  m_str = (icUInt16Number*)calloc(m_alloc, sizeof(icUInt16Number));
+  if (!m_str) {
+    m_alloc = 0;
+    return;
   }
+  FromUtf8(szStr, 0);
 }
 
 CIccUTF16String::CIccUTF16String(const CIccUTF16String &str)
@@ -2851,27 +2854,60 @@ CIccUTF16String& CIccUTF16String::operator=(const icUInt16Number *uzStr)
 
 bool CIccUTF16String::FromUtf8(const char *szStr, size_t sizeSrc)
 {
-  if (!sizeSrc) sizeSrc = strlen(szStr);
-  if (sizeSrc) {
-    size_t nAlloc = AllocSize(sizeSrc * 2);
-    if (m_alloc <= nAlloc) {
-      m_str = (icUInt16Number*)icRealloc(m_str, nAlloc * sizeof(icUInt16Number));
-      m_alloc = nAlloc;
-    }
-    if (m_str) {
-      memset(m_str, 0, m_alloc * sizeof(icUInt16Number));
-      UTF16 *szDest = m_str;
-      icConvertUTF8toUTF16((const UTF8**)&szStr, (const UTF8*)&szStr[sizeSrc], &szDest, &szDest[m_alloc], lenientConversion);
-      if (m_str[0] == 0xfeff) {
-        size_t i;
-        for (i = 1; m_str[i]; i++) m_str[i-1] = m_str[i];
-        m_str[i-1] = 0;
-      }
-      m_len = WStrlen(m_str);
-    } else {
+  if (!szStr) {
+    szStr = "";
+    sizeSrc = 0;
+  }
+  else if (!sizeSrc) {
+    sizeSrc = strlen(szStr);
+  }
+
+  if (!m_str) {
+    m_alloc = 64;
+    m_str = (icUInt16Number*)calloc(m_alloc, sizeof(icUInt16Number));
+    if (!m_str) {
+      m_alloc = 0;
       m_len = 0;
       return false;
     }
+  }
+
+  if (sizeSrc) {
+    const size_t maxUnits = ((size_t)-1) / sizeof(icUInt16Number);
+    if (sizeSrc > (maxUnits - 64) / 2) {
+      m_len = 0;
+      m_str[0] = 0;
+      return false;
+    }
+
+    size_t nAlloc = AllocSize(sizeSrc * 2);
+    if (m_alloc <= nAlloc) {
+      m_str = (icUInt16Number*)icRealloc(m_str, nAlloc * sizeof(icUInt16Number));
+      if (!m_str) {
+        m_alloc = 0;
+        m_len = 0;
+        return false;
+      }
+      m_alloc = nAlloc;
+    }
+
+    memset(m_str, 0, m_alloc * sizeof(icUInt16Number));
+    UTF16 *szDest = m_str;
+    const UTF8 *srcStart = (const UTF8*)szStr;
+    icUtfConversionResult conv = icConvertUTF8toUTF16(&srcStart, (const UTF8*)&szStr[sizeSrc],
+                                                      &szDest, &szDest[m_alloc - 1],
+                                                      strictConversion);
+    if (conv != conversionOK || srcStart != (const UTF8*)&szStr[sizeSrc]) {
+      m_len = 0;
+      m_str[0] = 0;
+      return false;
+    }
+    m_len = (size_t)(szDest - m_str);
+    if (m_len && m_str[0] == 0xfeff) {
+      memmove(m_str, m_str + 1, (m_len - 1) * sizeof(icUInt16Number));
+      m_len--;
+    }
+    m_str[m_len] = 0;
   } else {
     m_len = 0;
     m_str[0] = 0;
@@ -2894,15 +2930,27 @@ const wchar_t *CIccUTF16String::ToWString(std::wstring &buf)
 
 const char *icUtf16ToUtf8(std::string &buf, const icUInt16Number *szSrc, int sizeSrc)
 {
+  if (!szSrc) {
+    buf.clear();
+    return buf.c_str();
+  }
   if (!sizeSrc)
     sizeSrc = (int)CIccUTF16String::WStrlen(szSrc);
-  int n = sizeSrc * 4;
+  if (sizeSrc < 0) {
+    buf.clear();
+    return buf.c_str();
+  }
+  size_t n = (size_t)sizeSrc * 4u;
   if (n) {
     char *szBuf = (char*)malloc(n + 1);
+    if (!szBuf) {
+      buf.clear();
+      return buf.c_str();
+    }
     char *szDest = szBuf;
-    icConvertUTF16toUTF8(&szSrc, &szSrc[sizeSrc], (UTF8**)&szDest, (UTF8*)&szDest[n + 1], lenientConversion);
+    icConvertUTF16toUTF8(&szSrc, &szSrc[sizeSrc], (UTF8**)&szDest, (UTF8*)&szBuf[n], lenientConversion);
     *szDest = '\0';
-    buf = szBuf;
+    buf.assign(szBuf, (size_t)(szDest - szBuf));
     free(szBuf);
   } else {
     buf.clear();
@@ -2912,7 +2960,8 @@ const char *icUtf16ToUtf8(std::string &buf, const icUInt16Number *szSrc, int siz
 
 const unsigned short *icUtf8ToUtf16(CIccUTF16String &buf, const char *szSrc, int sizeSrc)
 {
-  buf.FromUtf8(szSrc, sizeSrc);
+  if (!buf.FromUtf8(szSrc, sizeSrc))
+    return NULL;
   return buf.c_str();
 }
 
@@ -2927,9 +2976,10 @@ icDateTimeNumber icGetDateTimeValue(const icChar *str)
 
   if (!stricmp(str, "now")) {
     time_t rawtime;
-    struct tm *timeinfo;
+    struct tm timeBuf;
+    struct tm *timeinfo = &timeBuf;
     time(&rawtime);
-    timeinfo = localtime(&rawtime);
+    timeinfo = localtime_r(&rawtime,timeinfo);
     year    = timeinfo->tm_year + 1900;
     month   = timeinfo->tm_mon  + 1;
     day     = timeinfo->tm_mday;

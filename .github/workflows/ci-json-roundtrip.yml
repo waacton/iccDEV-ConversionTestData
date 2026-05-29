@@ -14,8 +14,15 @@
 
 name: "ci-json-roundtrip"
 
+# Existing profile paths, summary rows, and command strings intentionally exceed
+# the default yamllint line length. Keep the disable local to this workflow.
+# yamllint disable rule:line-length
+
 permissions:
   contents: read
+
+env:
+  TRUSTED_SCRIPTS: ${{ github.workspace }}/trusted/.github/scripts
 
 concurrency:
   group: "json-roundtrip-${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}"
@@ -125,11 +132,20 @@ jobs:
             bash CreateAllProfiles.sh 2>&1 | tee "$CREATE_LOG"
 
           profile_parse_count="$(grep -c 'Profile parsed and saved correctly' "$CREATE_LOG" || true)"
-          if [ "$profile_parse_count" -ne 129 ]; then
-            echo "[FAIL] Expected 129 generated profiles, got ${profile_parse_count}"
+          if [ "$profile_parse_count" -ne 130 ]; then
+            echo "[FAIL] Expected 130 generated profiles, got ${profile_parse_count}"
             exit 1
           fi
           echo "[OK] Generated ${profile_parse_count} test profiles"
+
+      - name: Refresh trusted sanitizer helpers for round-trip
+        uses: actions/checkout@c2d88d3ecc89a9ef08eebf45d9637801dcee7eb5  # v5.0.0
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: trusted
+          sparse-checkout: .github/scripts
+          fetch-depth: 1
+          persist-credentials: false
 
       - name: JSON round-trip test
         env:
@@ -139,7 +155,7 @@ jobs:
           git config --global credential.helper ""
           unset GITHUB_TOKEN || true
 
-          SANITIZER="$GITHUB_WORKSPACE/.github/scripts/sanitize-sed.sh"
+          SANITIZER="$TRUSTED_SCRIPTS/sanitize-sed.sh"
           if [ -f "$SANITIZER" ]; then
             # shellcheck disable=SC1090
             source "$SANITIZER"
@@ -211,7 +227,7 @@ jobs:
             echo ""
             echo "| Status | Profile | Original | JSON | Round-Trip | Delta |"
             echo "|--------|---------|----------|------|------------|-------|"
-          } >> "$GITHUB_STEP_SUMMARY"
+          } >> "$GITHUB_STEP_SUMMARY"  # elements-sanitized
 
           # Use process substitution to avoid subshell variable scoping
           while IFS= read -r f; do
@@ -343,12 +359,12 @@ jobs:
             echo ""
             echo "**Summary**: PASS=${PASS} DIFF=${FAIL} SKIP=${SKIP} XFAIL=${XFAIL} TOTAL=${TOTAL}"
             echo ""
-            echo "**Artifact manifest**: Build/json-roundtrip-results/json-roundtrip-results.tsv"
+            echo "**Local manifest**: Build/json-roundtrip-results/json-roundtrip-results.tsv"
             echo ""
-            echo "**Uploaded profile payloads**: Display/LCDDisplay.icc plus non-PASS profiles, including expected failures"
+            echo "**Profile payload capture**: retained only inside the job workspace for PR safety"
             echo ""
             echo "**Display/LCDDisplay.icc**: $(sanitize_line "${LCDDISPLAY_STATUS:-not exercised}")"
-          } >> "$GITHUB_STEP_SUMMARY"
+          } >> "$GITHUB_STEP_SUMMARY"  # elements-sanitized
 
           echo "[OK] Round-trip test complete: PASS=${PASS} DIFF=${FAIL} SKIP=${SKIP} XFAIL=${XFAIL} TOTAL=${TOTAL}"
           echo "[JSON-RT] Results written to ${RESULT_DIR}"
@@ -364,14 +380,14 @@ jobs:
             exit 1
           fi
 
-      - name: Upload JSON round-trip artifacts
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      - name: Refresh trusted sanitizer helpers for CTest
+        uses: actions/checkout@c2d88d3ecc89a9ef08eebf45d9637801dcee7eb5  # v5.0.0
         with:
-          name: json-roundtrip-results
-          path: Build/json-roundtrip-results
-          if-no-files-found: error
-          retention-days: 14
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: trusted
+          sparse-checkout: .github/scripts
+          fetch-depth: 1
+          persist-credentials: false
 
       - name: CTest JSON focused regressions
         env:
@@ -382,7 +398,7 @@ jobs:
           git config --global credential.helper ""
           unset GITHUB_TOKEN || true
 
-          SANITIZER="$GITHUB_WORKSPACE/.github/scripts/sanitize-sed.sh"
+          SANITIZER="$TRUSTED_SCRIPTS/sanitize-sed.sh"
           if [ -f "$SANITIZER" ]; then
             # shellcheck disable=SC1090
             source "$SANITIZER"
@@ -400,11 +416,11 @@ jobs:
             --output-on-failure \
             --no-tests=error \
             --output-junit Build/build-json/json-focused-ctest-results.xml \
-            -R 'iccdev\.(stdobserver-regressions|mluc-iso-code-regressions)'
+            -R 'iccdev\.(json-parser-regressions|stdobserver-regressions|mluc-iso-code-regressions)'
 
           {
             echo ""
             echo "### CTest JSON Focused Regressions"
             echo ""
-            echo "**Command**: $(sanitize_line "ctest -R iccdev.(stdobserver-regressions|mluc-iso-code-regressions)")"
-          } >> "$GITHUB_STEP_SUMMARY"
+            echo "**Command**: $(sanitize_line "ctest -R iccdev.(json-parser-regressions|stdobserver-regressions|mluc-iso-code-regressions)")"
+          } >> "$GITHUB_STEP_SUMMARY"  # elements-sanitized

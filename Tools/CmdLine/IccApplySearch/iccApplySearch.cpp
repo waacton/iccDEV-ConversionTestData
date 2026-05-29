@@ -78,6 +78,38 @@
 #include "IccConnect.h"
 #include <memory>
 #include <vector>
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
+
+// ============================================================================
+
+static
+FILE* icOpenWriteTextFile(const char* szFname)
+{
+  if (!szFname || !szFname[0])
+    return stdout;
+
+#if defined(_WIN32)
+  return fopen(szFname, "wt");
+#else
+  int fd = open(szFname, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+  if (fd < 0)
+    return nullptr;
+
+  FILE* f = fdopen(fd, "wt");
+  if (!f)
+    close(fd);
+
+  return f;
+#endif
+}
+
+// ============================================================================
+
 
 //----------------------------------------------------
 // Function Declarations
@@ -235,7 +267,7 @@ int main(int argc, const char* argv[])
   CIccCfgSearchApply cfgSearchApply;
   CIccCfgColorData cfgData;
 
-  if (argc > 2 && !stricmp(argv[1], "-cfg")) {
+  if (!stricmp(argv[1], "-cfg")) {
     json cfg;
     if (!loadJsonFrom(cfg, argv[2]) || !cfg.is_object()) {
       printf("Unable to read configuration from '%s'\n", argv[2]);
@@ -325,7 +357,7 @@ int main(int argc, const char* argv[])
     }
 
     if (!exportFile.empty()) {
-      FILE* f = fopen(exportFile.c_str(), "wt");
+      FILE* f = icOpenWriteTextFile(exportFile.c_str());
       if (f) {
         json cfgJson;
         json applyJson, profilesJson;
@@ -348,8 +380,11 @@ int main(int argc, const char* argv[])
 
 
         std::string jsonText = cfgJson.dump(1);
-        fwrite(jsonText.c_str(), 1, jsonText.size(), f);
-        fclose(f);
+        size_t n = fwrite(jsonText.c_str(), 1, jsonText.size(), f);
+        if (n != jsonText.size()) {
+          printf("Error writing json config file '%s'\n", exportFile.c_str());
+        }
+        (void)fclose(f);
       }
       else {
         printf("Unable to export config file '%s'\n", exportFile.c_str());
@@ -515,8 +550,7 @@ int main(int argc, const char* argv[])
     return -1;
   }
 
-  if (pMruCmm)
-    delete pMruCmm;
+  delete pMruCmm;
 
   return 0;
 }

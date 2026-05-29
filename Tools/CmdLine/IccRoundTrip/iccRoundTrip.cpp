@@ -83,8 +83,8 @@ public:
 
   void Compare(icFloatNumber *pixel, icFloatNumber *deviceLab, icFloatNumber *lab1, icFloatNumber *lab2);
 
-  icFloatNumber GetMean1() { return sum1 / num1; }
-  icFloatNumber GetMean2() { return sum2 / num2; }
+  icFloatNumber GetMean1() { if (num1 == 0.0) return 0.0; return sum1 / num1; }
+  icFloatNumber GetMean2() { if (num2 == 0.0) return 0.0; else return sum2 / num2; }
 
   icFloatNumber minDE1, minDE2;
   icFloatNumber maxDE1, maxDE2;
@@ -208,13 +208,14 @@ int main(int argc, char* argv[])
   if (prmg.m_nTotal) {
     printf("\nPRMG Interoperability - Round Trip Results\n");
     printf(  "------------------------------------------------------\n");
-
-    printf("DE <= 1.0 (%8u): %5.1f%%\n", prmg.m_nDE1, (float)prmg.m_nDE1/(float)prmg.m_nTotal*100.0); 
-    printf("DE <= 2.0 (%8u): %5.1f%%\n", prmg.m_nDE2, (float)prmg.m_nDE2/(float)prmg.m_nTotal*100.0);
-    printf("DE <= 3.0 (%8u): %5.1f%%\n", prmg.m_nDE3, (float)prmg.m_nDE3/(float)prmg.m_nTotal*100.0);
-    printf("DE <= 5.0 (%8u): %5.1f%%\n", prmg.m_nDE5, (float)prmg.m_nDE5/(float)prmg.m_nTotal*100.0);
-    printf("DE <=10.0 (%8u): %5.1f%%\n", prmg.m_nDE10, (float)prmg.m_nDE10/(float)prmg.m_nTotal*100.0);
-    printf("Total     (%8u)\n", prmg.m_nTotal);
+    
+    float scaling = 100.0f / (float)prmg.m_nTotal;
+    printf("DE <= 1.0 (%8u): %5.1f%%\n", (unsigned int) prmg.m_nDE1, scaling*(float)prmg.m_nDE1);
+    printf("DE <= 2.0 (%8u): %5.1f%%\n", (unsigned int) prmg.m_nDE2, scaling*(float)prmg.m_nDE2);
+    printf("DE <= 3.0 (%8u): %5.1f%%\n", (unsigned int) prmg.m_nDE3, scaling*(float)prmg.m_nDE3);
+    printf("DE <= 5.0 (%8u): %5.1f%%\n", (unsigned int) prmg.m_nDE5, scaling*(float)prmg.m_nDE5);
+    printf("DE <=10.0 (%8u): %5.1f%%\n", (unsigned int) prmg.m_nDE10, scaling*(float)prmg.m_nDE10);
+    printf("Total     (%8u)\n", (unsigned int) prmg.m_nTotal);
   }
   return 0;
 }

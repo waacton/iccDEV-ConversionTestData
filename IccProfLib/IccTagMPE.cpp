@@ -80,6 +80,7 @@
 #include "IccIO.h"
 #include "IccMpeFactory.h"
 #include <map>
+#include <new>
 #include "IccUtil.h"
 
 #ifdef USEICCDEVNAMESPACE
@@ -207,23 +208,22 @@ CIccMpeUnknown::CIccMpeUnknown(const CIccMpeUnknown &elem)
  ******************************************************************************/
 CIccMpeUnknown &CIccMpeUnknown::operator=(const CIccMpeUnknown &elem)
 {
-  if (m_pData)
-    free(m_pData);
+  free(m_pData);
 
-   m_sig = elem.m_sig;
-   m_nReserved = elem.m_nReserved;
-   m_nInputChannels = elem.m_nInputChannels;
-   m_nOutputChannels = elem.m_nOutputChannels;
-   m_nSize = elem.m_nSize;
-   if (m_nSize) {
-     m_pData = (icUInt8Number*)malloc(m_nSize);
-     if (m_pData)
+  m_sig = elem.m_sig;
+  m_nReserved = elem.m_nReserved;
+  m_nInputChannels = elem.m_nInputChannels;
+  m_nOutputChannels = elem.m_nOutputChannels;
+  m_nSize = elem.m_nSize;
+  if (m_nSize) {
+    m_pData = (icUInt8Number*)malloc(m_nSize);
+    if (m_pData)
        memcpy(m_pData, elem.m_pData, m_nSize);
-   }
-   else
-     m_pData = NULL;
+  }
+  else
+    m_pData = NULL;
 
-   return (*this);
+  return (*this);
 }
 
 /**
@@ -238,8 +238,7 @@ CIccMpeUnknown &CIccMpeUnknown::operator=(const CIccMpeUnknown &elem)
  ******************************************************************************/
 CIccMpeUnknown::~CIccMpeUnknown()
 {
-  if (m_pData)
-    free(m_pData);
+  free(m_pData);
 }
 
 /**
@@ -289,7 +288,7 @@ void CIccMpeUnknown::Describe(std::string &sDescription, int nVerboseness)
   icChar buf[bufSize], sigbuf[40];
 
   snprintf(buf, bufSize, "Unknown Element(%s) Type of %u Bytes.",
-          icGetSig(sigbuf, 40, m_sig), m_nSize);
+          icGetSig(sigbuf, 40, m_sig), (unsigned int) m_nSize);
   sDescription += buf;
 
   if (nVerboseness > 50) {
@@ -312,8 +311,7 @@ void CIccMpeUnknown::Describe(std::string &sDescription, int nVerboseness)
 bool CIccMpeUnknown::SetDataSize(icUInt32Number nSize, bool /* bZeroData =true */)
 {
   bool rv = true;
-  if (m_pData)
-    free(m_pData);
+  free(m_pData);
 
   // Prevent excessive allocation - limit to 256MB for unknown MPE data
   const icUInt32Number MAX_MPE_UNKNOWN_SIZE = 268435456; // 256 MB
@@ -587,14 +585,12 @@ CIccDblPixelBuffer::~CIccDblPixelBuffer()
  ******************************************************************************/
 void CIccDblPixelBuffer::Clean()
 {
-  if (m_pixelBuf1) {
-    free(m_pixelBuf1);
-    m_pixelBuf1 = NULL;
-  }
-  if (m_pixelBuf2) {
-    free(m_pixelBuf2);
-    m_pixelBuf2 = NULL;
-  }
+  free(m_pixelBuf1);
+  m_pixelBuf1 = NULL;
+
+  free(m_pixelBuf2);
+  m_pixelBuf2 = NULL;
+    
   m_nMaxChannels = 0;
   m_nLastNumChannels = 0;
 }
@@ -672,7 +668,7 @@ CIccApplyTagMpe::~CIccApplyTagMpe()
 bool CIccApplyTagMpe::AppendElem(CIccMultiProcessElement *pElem)
 {
   if (!m_list)
-    m_list = new CIccApplyMpeList();
+    m_list = new (std::nothrow) CIccApplyMpeList();
 
   if (!m_list)
     return false;
@@ -829,6 +825,21 @@ CIccTagMultiProcessElement::~CIccTagMultiProcessElement()
 
 typedef std::map<CIccMultiProcessElement*, icPositionNumber> CIccLutPtrMap;
 typedef std::map<icUInt32Number, CIccMultiProcessElement*> CIccLutOffsetMap;
+
+static bool icGetWritePosition(int64_t base, int64_t start, int64_t end, icPositionNumber &position)
+{
+  const int64_t maxU32 = 0xffffffffLL;
+
+  if (base < 0 || start < base || end <= start)
+    return false;
+  if (start - base > maxU32 || end - start > maxU32)
+    return false;
+
+  position.offset = (icUInt32Number)(start - base);
+  position.size = (icUInt32Number)(end - start);
+  return true;
+}
+
 /**
  ******************************************************************************
  * Name: CIccTagMultiProcessElement::Clean
@@ -857,10 +868,8 @@ void CIccTagMultiProcessElement::Clean()
     m_list = NULL;
   }
 
-  if (m_position) {
-    free(m_position);
-    m_position = NULL;
-  }
+  free(m_position);
+  m_position = NULL;
 
   m_nProcElements = 0;
 }
@@ -1000,7 +1009,9 @@ bool CIccTagMultiProcessElement::Read(icUInt32Number size, CIccIO *pIO)
 
   Clean();
 
-  size_t tagStart = pIO->Tell();
+  int64_t tagStart = pIO->Tell();
+  if (tagStart < 0)
+    return false;
 
   if (!pIO->Read32(&sig))
     return false;
@@ -1017,10 +1028,15 @@ bool CIccTagMultiProcessElement::Read(icUInt32Number size, CIccIO *pIO)
   if (!pIO->Read32(&m_nProcElements))
     return false;
 
+  // Prevent excessive allocation and overflows - limit to 65536 elements (reasonable max)
+  const icUInt32Number MAX_CALC_ELEMENTS = 65536;
+  if (m_nProcElements >= MAX_CALC_ELEMENTS)
+    return false;
+
   if ( (headerSize + (icUInt64Number)m_nProcElements*sizeof(icPositionNumber)) > size)
     return false;
 
-  m_list = new CIccMultiProcessElementList();
+  m_list = new (std::nothrow) CIccMultiProcessElementList();
 
   if (!m_list)
     return false;
@@ -1103,7 +1119,9 @@ bool CIccTagMultiProcessElement::Write(CIccIO *pIO)
   if (!pIO)
     return false;
 
-  size_t tagStart = pIO->Tell();
+  int64_t tagStart = pIO->Tell();
+  if (tagStart < 0)
+    return false;
 
   if (!pIO->Write32(&sig))
     return false;
@@ -1128,12 +1146,11 @@ bool CIccTagMultiProcessElement::Write(CIccIO *pIO)
     return false;
 
   if (m_nProcElements) {
-    size_t offsetPos = pIO->Tell();
+    int64_t offsetPos = pIO->Tell();
+    if (offsetPos < tagStart)
+      return false;
 
-    if (m_position) {
-      free(m_position);
-    }
-
+    free(m_position);
     m_position = (icPositionNumber*)calloc(m_nProcElements, sizeof(icPositionNumber));
 
     if (!m_position)
@@ -1153,25 +1170,28 @@ bool CIccTagMultiProcessElement::Write(CIccIO *pIO)
     //Write out each process element
     for (j=0, i=m_list->begin(); i!=m_list->end(); i++, j++) {
       if (map.find(i->ptr)==map.end()) {
-        size_t start = pIO->Tell();
+        int64_t start = pIO->Tell();
+        if (start < tagStart)
+          return false;
 
         if (!i->ptr->Write(pIO))
           return false;
 
-        size_t end = pIO->Tell();
+        int64_t end = pIO->Tell();
+        if (!icGetWritePosition(tagStart, start, end, position))
+          return false;
 
         if (!pIO->Align32())
           return false;
-
-        position.offset = (icUInt32Number)(start - tagStart);
-        position.size = (icUInt32Number)(end - start);
 
         map[i->ptr] = position;
       }
       m_position[j] = map[i->ptr];
     }
 
-    size_t endPos = pIO->Tell();
+    int64_t endPos = pIO->Tell();
+    if (endPos < offsetPos)
+      return false;
 
     if (pIO->Seek(offsetPos, icSeekSet)<0)
       return false;
@@ -1415,7 +1435,7 @@ CIccMultiProcessElementList::iterator CIccTagMultiProcessElement::GetLastElem()
 ******************************************************************************/
 CIccApplyTagMpe *CIccTagMultiProcessElement::GetNewApply()
 {
-  CIccApplyTagMpe *pApply = new CIccApplyTagMpe(this);
+  CIccApplyTagMpe *pApply = new (std::nothrow) CIccApplyTagMpe(this);
 
   if (!pApply)
     return NULL;

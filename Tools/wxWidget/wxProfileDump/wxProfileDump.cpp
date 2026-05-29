@@ -74,6 +74,7 @@ Copyright:  (c) see ICC Software License
 #include "IccEval.h"
 #include "IccPrmg.h"
 #include "IccProfLibVer.h"
+#include <cmath>
 #include <vector>
 #include <unordered_map>
 #include <algorithm>
@@ -99,14 +100,14 @@ Copyright:  (c) see ICC Software License
 //    #include "mondrian.xpm"
 #endif
 
-#include "bitmaps/new.xpm"
 #include "bitmaps/open.xpm"
-#include "bitmaps/save.xpm"
-#include "bitmaps/copy.xpm"
-#include "bitmaps/cut.xpm"
-#include "bitmaps/paste.xpm"
-#include "bitmaps/print.xpm"
 #include "bitmaps/help.xpm"
+//#include "bitmaps/new.xpm"
+//#include "bitmaps/save.xpm"
+//#include "bitmaps/copy.xpm"
+//#include "bitmaps/cut.xpm"
+//#include "bitmaps/paste.xpm"
+//#include "bitmaps/print.xpm"
 
 
 #include "wxProfileDump.h"
@@ -662,8 +663,7 @@ MyChild::MyChild(wxMDIParentFrame *parent, const wxString& title, CIccProfile *p
 MyChild::~MyChild()
 {
     my_children.DeleteObject(this);
-	if (m_pIcc)
-		delete m_pIcc;
+    delete m_pIcc;
 }
 
 wxSizer *MyChild::CreateSizerWithText(const wxString &labelText, wxStaticText **ppText)
@@ -841,7 +841,7 @@ MyDialog::MyDialog(wxWindow *pParent, const wxString& title, wxString &profilePa
                 if ((icUInt64Number)i->TagInfo.offset + i->TagInfo.size > (icUInt64Number)pHdr->size) {
                     sReport += icMsgValidateNonCompliant;
                     snprintf(str, strSize, "Tag %s (offset %u, size %u) ends beyond EOF.\n",
-                        Fmt.GetTagSigName(i->TagInfo.sig), i->TagInfo.offset, i->TagInfo.size);
+                        Fmt.GetTagSigName(i->TagInfo.sig), (unsigned int) i->TagInfo.offset, (unsigned int) i->TagInfo.size);
                     sReport += str;
                     nStat = icMaxStatus(nStat, icValidateNonCompliant);
                 }
@@ -864,7 +864,7 @@ MyDialog::MyDialog(wxWindow *pParent, const wxString& title, wxString &profilePa
                 if (((icUInt64Number)i->TagInfo.offset + i->TagInfo.size > (icUInt64Number)closest) && (closest < safeProfileSize2)) {
                     sReport += icMsgValidateWarning;
                     snprintf(str, strSize, "Tag %s (offset %u, size %u) overlaps with following tag data starting at offset %d.\n",
-                        Fmt.GetTagSigName(i->TagInfo.sig), i->TagInfo.offset, i->TagInfo.size, closest);
+                        Fmt.GetTagSigName(i->TagInfo.sig), (unsigned int) i->TagInfo.offset, (unsigned int) i->TagInfo.size, closest);
                     sReport += str;
                     nStat = icMaxStatus(nStat, icValidateWarning);
                 }
@@ -877,7 +877,7 @@ MyDialog::MyDialog(wxWindow *pParent, const wxString& title, wxString &profilePa
                     icUInt32Number gapStart = (gapStart64 <= (icUInt64Number)UINT_MAX) ? (icUInt32Number)gapStart64 : UINT_MAX;
                     sReport += icMsgValidateWarning;
                     snprintf(str, strSize, "Tag %s (size %u) is followed by %d unnecessary additional bytes (from offset %u).\n",
-                        Fmt.GetTagSigName(i->TagInfo.sig), i->TagInfo.size, gapBytes, gapStart);
+                        Fmt.GetTagSigName(i->TagInfo.sig), (unsigned int) i->TagInfo.size, gapBytes, (unsigned int) gapStart);
                     sReport += str;
                     nStat = icMaxStatus(nStat, icValidateWarning);
                 }
@@ -891,7 +891,7 @@ MyDialog::MyDialog(wxWindow *pParent, const wxString& title, wxString &profilePa
                 icUInt32Number expectedOffset = (expectedFirstOffset <= (icUInt64Number)UINT_MAX) ? (icUInt32Number)expectedFirstOffset : UINT_MAX;
                 sReport += icMsgValidateNonCompliant;
                 snprintf(str, strSize, "First tag data is at offset %u rather than immediately after tag table (offset %u).\n",
-                    firstOffset, expectedOffset);
+                    (unsigned int) firstOffset, (unsigned int) expectedOffset);
                 sReport += str;
                 nStat = icMaxStatus(nStat, icValidateNonCompliant);
             }
@@ -949,8 +949,8 @@ public:
 
   void Compare(icFloatNumber *pixel, icFloatNumber *deviceLab, icFloatNumber *lab1, icFloatNumber *lab2);
 
-  icFloatNumber GetMean1() { return sum1 / num1; }
-  icFloatNumber GetMean2() { return sum2 / num2; }
+  icFloatNumber GetMean1() { if (num1 == 0.0) return 0.0; else return sum1 / num1; }
+  icFloatNumber GetMean2() { if (num2 == 0.0) return 0.0; else return sum2 / num2; }
 
   icFloatNumber minDE1, minDE2;
   icFloatNumber maxDE1, maxDE2;
@@ -1064,19 +1064,23 @@ wxString AnalyzeRoundTrip(wxString &profilePath, icRenderingIntent nIntent, bool
   report += wxString::Format("   Min DeltaE:    %8.2" ICFLOATSFX "\n", eval.minDE2);
   report += wxString::Format("   Mean DeltaE:   %8.2" ICFLOATSFX "\n", eval.GetMean2());
   report += wxString::Format("   Max DeltaE:    %8.2" ICFLOATSFX "\n", eval.maxDE2);
-  report += wxString::Format("   DE <= 1.0 (%8u): %5.1f%%\n\n", eval.num3, (float)eval.num3 / (float)eval.m_nTotal*100.0);
+  float scaleEval = 0.0f;
+  if (eval.m_nTotal > 0)
+    scaleEval = 100.0f / (float)eval.m_nTotal;
+  report += wxString::Format("   DE <= 1.0 (%8u): %5.1f%%\n\n", eval.num3, scaleEval*(float)eval.num3);
 
   report += wxString::Format("   Max L, a, b:   " ICFLOATFMT ", " ICFLOATFMT ", " ICFLOATFMT "\n", eval.maxLab2[0], eval.maxLab2[1], eval.maxLab2[2]);
 
-  if (prmg.m_nTotal) {
+  if (prmg.m_nTotal > 0) {
     report += wxString::Format("\n   PRMG Interoperability - Round Trip Results\n");
     report += wxString::Format(  "   ------------------------------------------------------\n");
 
-    report += wxString::Format("   DE <= 1.0 (%8u): %5.1f%%\n", prmg.m_nDE1, (float)prmg.m_nDE1/(float)prmg.m_nTotal*100.0); 
-    report += wxString::Format("   DE <= 2.0 (%8u): %5.1f%%\n", prmg.m_nDE2, (float)prmg.m_nDE2/(float)prmg.m_nTotal*100.0);
-    report += wxString::Format("   DE <= 3.0 (%8u): %5.1f%%\n", prmg.m_nDE3, (float)prmg.m_nDE3/(float)prmg.m_nTotal*100.0);
-    report += wxString::Format("   DE <= 5.0 (%8u): %5.1f%%\n", prmg.m_nDE5, (float)prmg.m_nDE5/(float)prmg.m_nTotal*100.0);
-    report += wxString::Format("   DE <=10.0 (%8u): %5.1f%%\n", prmg.m_nDE10, (float)prmg.m_nDE10/(float)prmg.m_nTotal*100.0);
+    float scaling = 100.0f / (float)prmg.m_nTotal;
+    report += wxString::Format("   DE <= 1.0 (%8u): %5.1f%%\n", prmg.m_nDE1, scaling*(float)prmg.m_nDE1);
+    report += wxString::Format("   DE <= 2.0 (%8u): %5.1f%%\n", prmg.m_nDE2, scaling*(float)prmg.m_nDE2);
+    report += wxString::Format("   DE <= 3.0 (%8u): %5.1f%%\n", prmg.m_nDE3, scaling*(float)prmg.m_nDE3);
+    report += wxString::Format("   DE <= 5.0 (%8u): %5.1f%%\n", prmg.m_nDE5, scaling*(float)prmg.m_nDE5);
+    report += wxString::Format("   DE <=10.0 (%8u): %5.1f%%\n", prmg.m_nDE10, scaling*(float)prmg.m_nDE10);
     report += wxString::Format("   Total     (%8u)\n", prmg.m_nTotal);
   }
 

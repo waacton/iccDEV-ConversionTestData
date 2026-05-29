@@ -9,22 +9,29 @@
 #
 # Last Updated: 2026-03-02 01:07Z by David Hoyt
 #
-#               Runs .github/tests/test_sanitization.sh,
-#               test-xss-signatures.sh, and test-xss-extended.sh
-#               against the canonical sanitize-sed.sh v3.
+#               Runs Bash and PowerShell sanitizer tests against the
+#               canonical sanitizer helpers.
 #
 ###############################################################
 
 name: "ci-sanitizer-tests"
 
+# Existing defense-layer table rows intentionally exceed the default yamllint
+# line length. Keep the disable local to this workflow.
+# yamllint disable rule:line-length
+
 permissions:
   contents: read
+
+env:
+  TRUSTED_SCRIPTS: ${{ github.workspace }}/trusted/.github/scripts
 
 on:
   push:
     branches: [master]
     paths:
       - '.github/scripts/sanitize-sed.sh'
+      - '.github/scripts/sanitize.ps1'
       - '.github/tests/**'
       - '.github/workflows/ci-sanitizer-tests.yml'
 
@@ -32,6 +39,7 @@ on:
     branches: [master]
     paths:
       - '.github/scripts/sanitize-sed.sh'
+      - '.github/scripts/sanitize.ps1'
       - '.github/tests/**'
       - '.github/workflows/ci-sanitizer-tests.yml'
 
@@ -59,6 +67,7 @@ jobs:
           git config --global credential.helper ""
           unset GITHUB_TOKEN || true
 
+      # preflight: allow-pr-script-execution reason=sanitizer-under-test
       - name: Verify sanitize-sed.sh exists
         shell: bash --noprofile --norc {0}
         env:
@@ -72,6 +81,7 @@ jobs:
           source .github/scripts/sanitize-sed.sh
           echo "Sanitizer version: $(sanitizer_version)"
 
+      # preflight: allow-pr-script-execution reason=sanitizer-under-test
       - name: Run core sanitization tests
         shell: bash --noprofile --norc {0}
         env:
@@ -80,6 +90,7 @@ jobs:
           set -euo pipefail
           bash .github/tests/test_sanitization.sh
 
+      # preflight: allow-pr-script-execution reason=sanitizer-under-test
       - name: Run XSS signature tests
         shell: bash --noprofile --norc {0}
         env:
@@ -88,6 +99,7 @@ jobs:
           set -euo pipefail
           bash .github/tests/test-xss-signatures.sh
 
+      # preflight: allow-pr-script-execution reason=sanitizer-under-test
       - name: Run extended XSS tests
         shell: bash --noprofile --norc {0}
         env:
@@ -96,6 +108,7 @@ jobs:
           set -euo pipefail
           bash .github/tests/test-xss-extended.sh
 
+      # preflight: allow-pr-script-execution reason=sanitizer-under-test
       - name: "Reproduce trivy#10253 attack pattern"
         shell: bash --noprofile --norc {0}
         env:
@@ -168,6 +181,15 @@ jobs:
           echo ""
           echo "=== All trivy#10253 defenses verified ==="
 
+      - name: Checkout trusted sanitizer helpers
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0 (node24)
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: trusted
+          sparse-checkout: .github/scripts
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Generate step summary
         if: always()
         shell: bash --noprofile --norc {0}
@@ -175,11 +197,12 @@ jobs:
           BASH_ENV: /dev/null
         run: |
           set -euo pipefail
-          if [ ! -r .github/scripts/sanitize-sed.sh ]; then
+          if [ ! -r "$TRUSTED_SCRIPTS/sanitize-sed.sh" ]; then
             echo "sanitize-sed.sh missing - cannot generate summary" >&2
             exit 0
           fi
-          source .github/scripts/sanitize-sed.sh
+          # shellcheck disable=SC1090
+          source "$TRUSTED_SCRIPTS/sanitize-sed.sh"
           {
             echo "## Sanitizer Test Results"
             echo ""
@@ -200,7 +223,7 @@ jobs:
             echo "| 4. Canonicalize() + env: block | PowerShell filters control/bidi ranges; env: block prevents shell interpretation | Windows protection without claiming emoji or metacharacter stripping |"
             echo ""
             echo "**Sanitizer version:** \`$(sanitizer_version)\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+          } >> "$GITHUB_STEP_SUMMARY"  # elements-sanitized
 
   powershell-tests:
     name: PowerShell Sanitizer Tests
@@ -210,6 +233,15 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8  # v5.0.0 (node24)
         with:
           persist-credentials: false
+
+      # preflight: allow-pr-script-execution reason=sanitizer-under-test
+      - name: Run canonical PowerShell sanitizer tests
+        shell: pwsh -NoProfile -NoLogo -NonInteractive -Command {0}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config --global credential.helper ""
+          if (Test-Path env:GITHUB_TOKEN) { Remove-Item env:GITHUB_TOKEN }
+          .github/tests/test_powershell_sanitizer.ps1
 
       - name: Verify PowerShell Canonicalize function
         shell: pwsh -NoProfile -NoLogo -NonInteractive -Command {0}

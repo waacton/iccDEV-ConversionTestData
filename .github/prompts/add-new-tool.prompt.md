@@ -101,7 +101,8 @@ LD_LIBRARY_PATH=IccProfLib:IccXML \
   Tools/IccNewTool/iccNewTool ../Testing/Display/sRGB_D65_MAT.icc
 
 # Test with sanitizers
-cmake Cmake -DCMAKE_CXX_COMPILER=clang++ -DENABLE_SANITIZERS=ON
+rm -rf CMakeCache.txt CMakeFiles/
+CC=clang CXX=clang++ cmake Cmake -DCMAKE_BUILD_TYPE=Debug -DENABLE_TOOLS=ON -DENABLE_SANITIZERS=ON
 make -j"$(nproc)"
 ASAN_OPTIONS=halt_on_error=0,detect_leaks=0 \
 LD_LIBRARY_PATH=IccProfLib:IccXML \
@@ -121,10 +122,13 @@ Add the same to `Testing/RunTests.bat` for Windows.
 
 ## Step 7: Update Documentation
 
+- Add `Tools/CmdLine/IccNewTool/Readme.md` with purpose, usage, and output notes
+- Add tool description and example to `docs/tools-cli-reference.md`
+- Confirm `.github/ci/doxygen/Doxyfile` includes Markdown so `Tools/CmdLine/*/Readme.md` files are generated
 - Add tool description to `docs/index.md` under "Tools based upon these libraries"
 - Add to `docs/install.md` Docker examples if applicable
 - Update `.github/copilot-instructions.md` project structure table
-- Update WASM workflow artifacts list if WASM-compatible
+- Update `Build/Cmake/wasm-package/` staging, exports, tests, package metadata, and release workflow smoke text if WASM-compatible
 
 ## Checklist
 
@@ -135,7 +139,7 @@ Add the same to `Testing/RunTests.bat` for Windows.
 - [ ] Builds clean with `clang++ -Wall -Wextra`
 - [ ] 0 ASan/UBSan findings on test profiles
 - [ ] Added to Testing/RunTests.sh and .bat
-- [ ] docs/index.md updated
+- [ ] Tool `Readme.md`, `docs/tools-cli-reference.md`, and `docs/index.md` updated
 - [ ] If core tool: added to `_core_tools` in `ports/iccdev/portfile.cmake`
 - [ ] If core tool: added to verify step in `.github/workflows/ci-vcpkg-ports.yml`
 - [ ] PR description includes: purpose, build/test commands, sample output

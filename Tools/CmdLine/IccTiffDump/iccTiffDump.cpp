@@ -70,12 +70,19 @@
 
 
 #include <cstdio>
+#include <string>
 #include "IccCmm.h"
 #include "IccUtil.h"
 #include "IccDefs.h"
 #include "IccProfLibVer.h"
 #include "IccApplyBPC.h"
 #include "TiffImg.h"
+#include "../IccCmdLineUtil.h"
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 typedef struct {
   unsigned long nId;
@@ -112,6 +119,24 @@ const char* GetId(unsigned long nId, IdList* pIdList)
 {
   for (;pIdList->nId != nId && pIdList->nId != UNKNOWNID; pIdList++);
   return pIdList->szName;
+}
+
+static FILE* icOpenWriteBinaryFile(const char* szFname);
+
+static bool WriteEmbeddedIccProfile(const char* szFname, const unsigned char *pProfMem, unsigned int nLen)
+{
+  if (!pProfMem || !nLen)
+    return false;
+
+  FILE *fp = icOpenWriteBinaryFile(szFname);
+  if (!fp)
+    return false;
+
+  bool failed = (fwrite(pProfMem, 1, nLen, fp) != nLen);
+  if (fclose(fp))
+    failed = true;
+
+  return !failed;
 }
 
 void Usage() 
@@ -151,7 +176,8 @@ void DumpProfileInfo(CIccProfile* pProfile, std::string prefix)
   if (pDesc) {
     if (pDesc->GetType() == icSigTextDescriptionType) {
       CIccTagTextDescription* pText = (CIccTagTextDescription*)pDesc;
-      printf("%sDescription:      %s\n", prefix.c_str(), pText->GetText());
+      std::string desc = icSanitizeConsoleText(pText->GetText());
+      printf("%sDescription:      %s\n", prefix.c_str(), desc.c_str());
     }
     else if (pDesc->GetType() == icSigMultiLocalizedUnicodeType) {
       CIccTagMultiLocalizedUnicode* pStrs = (CIccTagMultiLocalizedUnicode*)pDesc;
@@ -160,7 +186,8 @@ void DumpProfileInfo(CIccProfile* pProfile, std::string prefix)
         if (text != pStrs->m_Strings->end()) {
           std::string line;
           text->GetText(line);
-          printf("%sDescription:      %s\n", prefix.c_str(), line.c_str());
+          std::string desc = icSanitizeConsoleText(line);
+          printf("%sDescription:      %s\n", prefix.c_str(), desc.c_str());
         }
       }
     }
@@ -181,6 +208,29 @@ void DumpProfileInfo(CIccProfile* pProfile, std::string prefix)
 
 //===================================================
 
+static
+FILE* icOpenWriteBinaryFile(const char* szFname)
+{
+  if (!szFname || !szFname[0])
+    return stdout;
+
+#if defined(_WIN32)
+  return fopen(szFname, "wb");
+#else
+  int fd = open(szFname, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
+  if (fd < 0)
+    return nullptr;
+
+  FILE* f = fdopen(fd, "wb");
+  if (!f)
+    close(fd);
+
+  return f;
+#endif
+}
+
+//===================================================
+
 int main(int argc, icChar* argv[])
 {
   int minargs = 1;
@@ -189,14 +239,16 @@ int main(int argc, icChar* argv[])
     return 0;
   }
 
+  std::string srcName = icSanitizeConsoleText(argv[1]);
+
   CTiffImg SrcImg;
   if (!SrcImg.Open(argv[1])) {
-    printf("\nFile [%s] cannot be opened.\n", argv[1]);
+    printf("\nFile [%s] cannot be opened.\n", srcName.c_str());
     return -1;
   }
 
   printf("-------------------->Tiff Image Dump<---------------------------\n");
-  printf("Filename:          %s\n", argv[1]);
+  printf("Filename:          %s\n", srcName.c_str());
   printf("Size:              (%d x %d) pixels, (%.2lf\" x %.2lf\")\n",
     SrcImg.GetWidth(), SrcImg.GetHeight(),
     SrcImg.GetWidthIn(), SrcImg.GetHeightIn());
@@ -216,32 +268,34 @@ int main(int argc, icChar* argv[])
   if (SrcImg.GetIccProfile(pProfMem, nLen)) {
     printf("Profile:           Embedded\n");
 
-    // Optional profile export
-    if (argc > 2 && pProfMem && nLen > 0) {
-      FILE *fp = fopen(argv[2], "wb");
-      if (fp) {
-        fwrite(pProfMem, 1, nLen, fp);
-        fclose(fp);
-        printf("ICC profile saved to: %s\n", argv[2]);
-      } else {
-        fprintf(stderr, "Failed to write ICC profile to %s\n", argv[2]);
-      }
-    }
-
     // Profile description and metadata
     CIccProfile *pProfile = OpenIccProfile(pProfMem, nLen);
     if (pProfile) {
       DumpProfileInfo(pProfile, " ");
       if (argc > 2) {
-        pProfile->ReadTags(pProfile);
-        if (SaveIccProfile(argv[2], pProfile)) {
-          printf("\nProfile extracted to: %s\n", argv[2]);
+        std::string dstName = icSanitizeConsoleText(argv[2]);
+        if (pProfile->ReadTags(pProfile) && SaveIccProfile(argv[2], pProfile)) {
+          printf("\nProfile extracted to: %s\n", dstName.c_str());
         }
         else {
           printf("\nUnable to extract profile\n");
+          delete pProfile;
+          SrcImg.Close();
+          return -1;
         }
       }
       delete pProfile;
+    }
+    else if (argc > 2) {
+      std::string dstName = icSanitizeConsoleText(argv[2]);
+      if (WriteEmbeddedIccProfile(argv[2], pProfMem, nLen)) {
+        printf("ICC profile bytes saved to: %s\n", dstName.c_str());
+      }
+      else {
+        fprintf(stderr, "Failed to write ICC profile to %s\n", dstName.c_str());
+        SrcImg.Close();
+        return -1;
+      }
     }
   } else {
     printf("Profile:           None\n");

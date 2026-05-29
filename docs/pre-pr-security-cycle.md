@@ -12,14 +12,21 @@ the smallest useful evidence.
    `docs/ctest.md`.
 3. Run SAST appropriate to the change:
    - workflow edits: `audit-workflow-governance.prompt.md`, YAML parse,
-     `actionlint`, and direct-expression scans;
+     `actionlint`, full-workflow preflight canaries, trusted-base helper review,
+     CodeQL Actions analysis, and direct-expression scans;
+   - Python script edits: Python syntax checks and CodeQL Python analysis;
+   - shell script edits: ShellCheck; CodeQL Actions still covers inline workflow
+     `run:` blocks, but standalone shell scripts have no CodeQL extractor;
    - C/C++ or CMake edits: `.github/scripts/run-codeql-local.sh`, or the
      hosted `ci-codeql-security` workflow when local CodeQL is not practical;
+   - Dockerfile or container edits: `hadolint`, Trivy config, image
+     vulnerability/secret scan, and runtime or healthcheck smoke validation;
    - security-sensitive code paths: `code-review-hunting.prompt.md`.
 4. Run dynamic or sanitizer checks for the changed surface:
    - ASAN/UBSAN/IntSan builds for parser, profile, or tool changes;
    - CTest profile gates for generated profile behavior;
-   - release, Docker, WASM, or vcpkg smoke tests for packaging changes.
+   - release, Docker runtime/image-scan, WASM, or vcpkg smoke tests for
+     packaging changes.
 5. Fix every confirmed issue and repeat the relevant checks until the same
    command set is clean.
 6. Produce a golfed handoff: branch, commit, changed surface, command results,
@@ -27,9 +34,10 @@ the smallest useful evidence.
 
 ## SAST, DAST, and CodeQL Boundaries
 
-CodeQL is required for C/C++ or CMake-relevant security changes, but it is not a
-workflow linter. Pair CodeQL with workflow-governance checks for YAML and shell
-changes.
+CodeQL is required for workflow and Python script changes through preflight, and
+for C/C++ or CMake-relevant security changes through the full CodeQL workflow.
+Pair it with workflow-governance checks, actionlint, yamllint, ShellCheck, and
+container scanners because no single tool covers the full CI threat model.
 
 DAST in this repository usually means exercising built binaries and packaged
 artifacts with hostile or representative profiles, not a web scanner. Use
@@ -53,6 +61,7 @@ the defect or the proof.
 - `build.md`
 - `ctest.md`
 - `codeql.md`
+- `workflow-security-trust-boundaries.md`
 - `regression-workflow-governance.md`
 - `.github/skills/pre-pr-security-cycle/SKILL.md`
 - `.github/prompts/pre-pr-security-cycle.prompt.md`

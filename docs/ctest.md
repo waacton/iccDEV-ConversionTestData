@@ -90,17 +90,22 @@ cannot pass as a green no-op.
 
 ## Registered Suites
 
-Linux currently registers 22 tests:
-
 | Test | Source |
 |------|--------|
 | `iccdev.create-profiles` | `Testing/CreateAllProfiles.sh` |
+| `iccdev.embedio-read8-bounds` | `.github/ci/regression/embedio-read8-bounds.cpp` |
+| `iccdev.fileio-getlength-preserves-position` | `.github/ci/regression/fileio-getlength-position.cpp` |
+| `iccdev.fileio-seek-tell` | `.github/ci/regression/fileio-seek-tell.cpp` |
 | `iccdev.iccconnect-threaded-cmm` | `.github/ci/regression/iccconnect-threaded-cmm.cpp` |
+| `iccdev.parser-restore-calls` | `.github/ci/regression/parser-restore-calls.cpp` |
 | `iccdev.legacy-run-tests` | `Testing/RunTests.sh` |
+| `iccdev.profile-write-failure` | `.github/ci/regression/profile-write-failure.cpp` |
 | `iccdev.tool-coverage` | `.github/scripts/iccdev-tool-coverage-baseline.sh --asan --skip-hybrid` |
 | `iccdev.hybrid-pipeline` | `.github/scripts/iccdev-hybrid-pipeline-tests.sh` |
 | `iccdev.specsep-tiff-geometry-regression` | `.github/scripts/iccdev-specsep-tiff-geometry-regression-tests.sh` |
 | `iccdev.dump-profile-header-regression` | `.github/scripts/iccdev-dump-profile-header-regression-tests.sh` |
+| `iccdev.basic-string-regressions` | `.github/scripts/iccdev-basic-string-regression-tests.sh` |
+| `iccdev.pawg-report-regressions` | `.github/scripts/iccdev-pawg-report-regression-tests.sh` |
 | `iccdev.json-cfg` | `.github/scripts/iccdev-json-cfg-tests.sh` |
 | `iccdev.json-cli-exercise` | `.github/scripts/json-cli-exercise.sh` |
 | `iccdev.json-parser-regressions` | `.github/scripts/iccdev-json-parser-regression-tests.sh` |
@@ -109,12 +114,19 @@ Linux currently registers 22 tests:
 | `iccdev.mluc-read-utf16-regressions` | `.github/scripts/iccdev-mluc-read-utf16-regression-tests.sh` |
 | `iccdev.mluc-iso-code-regressions` | `.github/scripts/iccdev-mluc-iso-code-regression-tests.sh` |
 | `iccdev.pcc-zero-illuminant-regressions` | `.github/scripts/iccdev-pcc-zero-illuminant-regression-tests.sh` |
+| `iccdev.iccconnect-search-cost-regressions` | `.github/scripts/iccdev-iccconnect-search-cost-regression-tests.sh` |
+| `iccdev.cam-degenerate-regressions` | `.github/scripts/iccdev-cam-degenerate-regression-tests.sh` |
 | `iccdev.calculator-regressions` | `.github/scripts/iccdev-calculator-regression-tests.sh` |
 | `iccdev.lut16-zero-curve-regressions` | `.github/scripts/iccdev-lut16-zero-curve-regression-tests.sh` |
 | `iccdev.namedcolor-apply-regressions` | `.github/scripts/iccdev-namedcolor-apply-regression-tests.sh` |
 | `iccdev.v5-namedcmm-regressions` | `.github/scripts/iccdev-v5-namedcmm-regression-tests.sh` |
+| `iccdev.namedcolor-overprint-regressions` | `.github/scripts/iccdev-namedcolor-overprint-regression-tests.sh` |
 | `iccdev.version-bcd-regressions` | `.github/scripts/iccdev-version-bcd-regression-tests.sh` |
 | `iccdev.profile-visualize-regressions` | `.github/scripts/iccdev-profile-visualize-tests.sh` |
+| `iccdev.issue-1148-writer-device-regression` | `.github/scripts/iccdev-issue-1148-writer-device-regression.sh` |
+| `iccdev.issue-1150-output-failure-regression` | `.github/scripts/iccdev-issue-1150-output-failure-regression.sh` |
+| `iccdev.issue-1178-fromcube-devnull` | `.github/scripts/iccdev-issue-1178-fromcube-devnull-regression.sh` |
+| `iccdev.issue-1179-fromcube-regression` | `.github/scripts/iccdev-issue-1179-fromcube-regression.sh` |
 | `iccdev.describe-sink-api` | `.github/ci/regression/iccDescribeSinkTest.cpp` |
 
 `iccdev.legacy-run-tests` requires `iccToJson` and `iccFromJson` under CTest.
@@ -127,7 +139,19 @@ existing script without changing the CTest suite count. When a bug is tied to an
 AFL-minimized crash or hang, embed the smallest stable reproducer in the script
 or generate it under `ICCDEV_TEST_OUTDIR`; do not require local AFL output
 directories or commit generated crash artifacts. Validate both the direct script
-path and the CTest wrapper when changing this suite.
+path and the CTest wrapper when changing this suite. The JSON parser suite
+includes malformed curve gamma and out-of-range numeric narrowing coverage, and
+must reject invalid numeric fields before conversion without sanitizer findings.
+
+`iccdev.pawg-report-regressions` builds the standalone `iccPawgReport` tool,
+checks the 31-item PAWG report structure, verifies summary counts against the
+rendered item lines, runs malformed and malware-signature dynamic inputs, and
+fails on sanitizer findings.
+
+`iccdev.cam-degenerate-regressions` compiles a small helper from
+`.github/ci/regression/cam-degenerate.cpp` and exercises degenerate CAM forward
+and inverse conversions. It guards against divide-by-zero and non-finite
+appearance state regressions without committing generated profiles.
 
 `iccdev.hybrid-pipeline` preserves the full six-phase hybrid spectral/colorimetric
 integration test as a separate `slow` CTest label. Routine CI tool sweeps run
@@ -142,16 +166,25 @@ input semantics, and verifies graceful rejection without sanitizer findings.
 `iccdev.dump-profile-header-regression` mutates the ICC header size field to
 `0xffffffff` and verifies `iccDumpProfile -v 100` handles validation reporting
 without signed-conversion sanitizer findings.
+`iccdev.basic-string-regressions` replays the XML conversions from issue #1055
+and fails if `iccFromXml` emits sanitizer diagnostics from string-size
+arithmetic.
 
-Windows full tool builds currently register 5 tests:
+Windows full tool builds register these tests when all targets are available:
 
 | Test | Source |
 |------|--------|
+| `iccdev.embedio-read8-bounds` | `.github/ci/regression/embedio-read8-bounds.cpp` |
+| `iccdev.fileio-getlength-preserves-position` | `.github/ci/regression/fileio-getlength-position.cpp` |
+| `iccdev.fileio-seek-tell` | `.github/ci/regression/fileio-seek-tell.cpp` |
 | `iccdev.iccconnect-threaded-cmm` | `.github/ci/regression/iccconnect-threaded-cmm.cpp` |
+| `iccdev.parser-restore-calls` | `.github/ci/regression/parser-restore-calls.cpp` |
+| `iccdev.profile-write-failure` | `.github/ci/regression/profile-write-failure.cpp` |
 | `iccdev.windows-create-profiles` | `Testing/CreateAllProfiles.bat` |
 | `iccdev.windows-legacy-run-tests` | `Testing/RunTests.bat` |
 | `iccdev.windows-icc-dump-profile-smoke` | `Build/Cmake/Testing/RunWindowsDumpProfileSmokeTest.cmake` |
 | `iccdev.issue-987-shared-mpe-export` | `Build/Cmake/Testing/RunWindowsSharedExportTest.cmake` |
+| `iccdev.windows-pawg-report-smoke` | `Build/Cmake/Testing/RunWindowsPawgReportSmokeTest.cmake` |
 
 The batch-backed Windows tests run through
 `Build/Cmake/Testing/RunWindowsBatchTest.cmake`. The wrapper copies `Testing/`
@@ -216,13 +249,14 @@ For repeatable agent-assisted work, use
    - Set labels and a timeout.
    - Add `FIXTURES_REQUIRED iccdev_profiles` when the test needs generated
      profiles.
-3. Update hard-coded coverage counts when the suite count or generated profile
-   count changes:
-   - Linux CTest count in `.github/workflows/ci-tool-tests.yml`.
-   - Linux CTest count in `.github/workflows/ci-iccdev-tool-tests.yml`.
+3. Update hard-coded coverage counts when generated profile counts change:
    - Windows profile parse count in `Build/Cmake/Testing/CMakeLists.txt`.
    - JSON profile parse count in `.github/workflows/ci-json-roundtrip.yml`.
-   - WASM expected ICC count in `.github/workflows/ci-tool-tests.yml` when
+     Keep these in sync with `Testing/CreateAllProfiles.sh` and
+     `Testing/CreateAllProfiles.bat`.
+   - WASM expected ICC count in `Build/Cmake/wasm-package/regression.js`,
+     `.github/workflows/ci-pr-wasm.yml`, `.github/workflows/ci-pr-action.yml`,
+     and `.github/workflows/ci-latest-release.yml` when
      `Testing/CreateAllProfiles.sh` changes the generated-profile set.
 4. Validate locally with CMake configure, build, `ctest -N --no-tests=error`,
    `ctest --output-on-failure --no-tests=error`, and `git diff --check`.
