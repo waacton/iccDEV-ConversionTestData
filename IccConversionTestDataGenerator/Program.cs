@@ -8,7 +8,7 @@ const string converterRelativePath = "../../../../../cmake-build-debug/ConvertBu
 var exeLocation = Assembly.GetEntryAssembly()!.Location;
 var profilesPath = Path.GetFullPath(Path.Combine(exeLocation, profilesRelativePath));
 var converterPath = Path.GetFullPath(Path.Combine(exeLocation, converterRelativePath));
-var outputPath = Path.GetFullPath(Path.Combine(exeLocation, "../output/"));
+var outputPath = args.Length > 0 ? args[0] : Path.GetFullPath(Path.Combine(exeLocation, "../output/"));
 
 Directory.CreateDirectory(outputPath);
 
@@ -119,7 +119,7 @@ void GenerateData(Profile profile, List<string> inputRows, bool deviceToPcs)
 
     for (var intent = 0; intent <= 3; intent++)
     {
-        var outputCsvFilename = $"{profile.Name}_{(deviceToPcs ? "ToPcs" : "ToDevice")}_ICC-{intent}.csv";
+        var outputCsvFilename = $"{profile.Name}_{(deviceToPcs ? "DeviceToPcs" : "PcsToDevice")}_Intent{intent}.csv";
         var outputCsvPath = Path.Combine(outputPath, outputCsvFilename);
 
         var iccFile = Path.Combine(profilesPath, $"{profile.Name}.icc");
