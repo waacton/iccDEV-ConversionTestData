@@ -129,7 +129,8 @@ static inline icUInt16Number icJsonSafeU16(size_t n)
 
 static bool icJsonIsSafeLocalizedText(const std::string &text)
 {
-  for (unsigned char ch : text) {
+  for (size_t i = 0; i < text.size(); i++) {
+    unsigned char ch = static_cast<unsigned char>(text[i]);
     if (ch < 0x20 && ch != '\n' && ch != '\t')
       return false;
   }
@@ -730,7 +731,7 @@ bool CIccTagJsonSpectralViewingConditions::ParseJson(const IccJson &j, std::stri
     jGetValue(obs, "steps", steps);
     unsigned int res2 = 0;
     jGetValue(obs, "Reserved", res2);
-    if (steps < 0 || steps > 0xffff) {
+    if (steps <= 0 || steps > 0xffff) {
       parseStr += "ObserverFuncs steps out of range\n";
       return false;
     }
@@ -781,7 +782,7 @@ bool CIccTagJsonSpectralViewingConditions::ParseJson(const IccJson &j, std::stri
     jGetValue(illum, "steps", steps);
     unsigned int res3 = 0;
     jGetValue(illum, "Reserved", res3);
-    if (steps < 0 || steps > 0xffff) {
+    if (steps <= 0 || steps > 0xffff) {
       parseStr += "IlluminantSPD steps out of range\n";
       return false;
     }
