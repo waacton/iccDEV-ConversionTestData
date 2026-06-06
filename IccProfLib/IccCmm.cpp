@@ -7673,12 +7673,27 @@ IIccProfileConnectionConditions *CIccXformMpe::GetConnectionConditions() const
 */
 void CIccXformMpe::SetAppliedCC(IIccProfileConnectionConditions *pPCC)
 {
+  // CIccCmm::SetLateBindingCC may run more than once (e.g. once per
+  // CIccCmmSearch::Begin candidate) and feeds an xform's own
+  // GetConnectionConditions() back into SetAppliedCC. If we are handed the
+  // connection conditions we already applied, there is nothing to do:
+  // re-wrapping would leak the current combined PCC, and because the new
+  // CIccCombinedConnectionConditions stores a pointer to it, freeing the old
+  // one would leave that wrapper dangling (use-after-free).
+  if (pPCC && pPCC == m_pAppliedPCC)
+    return;
+
+  // Otherwise we are replacing the applied PCC. Release any previously-owned
+  // one first so it does not leak across repeated calls. This is safe because
+  // the incoming pPCC does not alias it (that case returned above), so no
+  // freshly-built combined PCC can reference the object being freed.
+  if (m_bDeleteAppliedPCC) {
+    delete m_pAppliedPCC;
+  }
+  m_pAppliedPCC = NULL;
+  m_bDeleteAppliedPCC = false;
+
   if (!pPCC) {
-    if (m_bDeleteAppliedPCC) {
-      delete m_pAppliedPCC;
-    }
-    m_pAppliedPCC = NULL;
-    m_bDeleteAppliedPCC = false;
     return;
   }
 

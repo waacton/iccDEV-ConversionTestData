@@ -4949,6 +4949,7 @@ bool CIccMpeCalculator::Read(icUInt32Number size, CIccIO *pIO)
 
       pIO->Seek(startPos + pos->offset, icSeekSet);
       if (!pElem->Read(pos->size, pIO)) {
+        delete pElem;
         free(posvals);
         return false;
       }
@@ -5470,6 +5471,7 @@ CIccApplyMpeCalculator::~CIccApplyMpeCalculator()
     for (i=0; i<m_nSubElem; i++) {
       delete m_SubElem[i];
     }
+    free(m_SubElem);
   }
 }
 
