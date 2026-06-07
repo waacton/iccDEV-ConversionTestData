@@ -6,21 +6,22 @@ const string profilesRelativePath = "../../../../Profiles/";
 const string converterRelativePath = "../../../../../cmake-build-debug/ConvertBulk.exe";
 
 var exeLocation = Assembly.GetEntryAssembly()!.Location;
-var profilesPath = Path.GetFullPath(Path.Combine(exeLocation, profilesRelativePath));
-var converterPath = Path.GetFullPath(Path.Combine(exeLocation, converterRelativePath));
+var inputPath = args.Length > 0 ? args[0] : Path.GetFullPath(Path.Combine(exeLocation, profilesRelativePath));
 var outputPath = args.Length > 0 ? args[0] : Path.GetFullPath(Path.Combine(exeLocation, "../output/"));
+var converterPath = Path.GetFullPath(Path.Combine(exeLocation, converterRelativePath));
 
 Directory.CreateDirectory(outputPath);
 
 var converterDateTime = new FileInfo(converterPath).LastWriteTime;
 Console.WriteLine($"Converter built {converterDateTime:f}");
 
-var files = Directory.GetFiles(profilesPath, "*.icc");
+var files = Directory.GetFiles(inputPath, "*.icc");
 foreach (var file in files)
 {
     var profile = new Profile(file);
     try
     {
+        Console.WriteLine($"Processing profile {profile.Name}");
         ProcessProfile(profile);
     }
     catch (Exception e)
@@ -42,10 +43,21 @@ void ProcessProfile(Profile profile)
 
     var deviceChannels = profile.Header.DataColourSpace switch
     {
-        "GRAY" => 1,
-        "RGB " => 3,
-        "CMYK" => 4,
+        "1CLR" or "GRAY" => 1,
+        "2CLR" => 2,
+        "3CLR" or "RGB " or "YCbr" or "Lab " => 3,
+        "4CLR" or "CMYK" => 4,
+        "5CLR" => 5,
+        "6CLR" => 6,
         "7CLR" => 7,
+        "8CLR" => 8,
+        "9CLR" => 9,
+        "ACLR" => 10,
+        "BCLR" => 11,
+        "CCLR" => 12,
+        "DCLR" => 13,
+        "ECLR" => 14,
+        "FCLR" => 15,
         _ => throw new NotSupportedException($"Device space {profile.Header.DataColourSpace}")
     };
     
@@ -59,7 +71,13 @@ void ProcessProfile(Profile profile)
 List<string> GenerateNormalisedInputs(int channels)
 {
     // standard range
-    var valuesPerChannel = channels <= 4 ? 6 : 3;
+    var valuesPerChannel = channels switch
+    {
+        > 7 => 2,
+        > 4 => 3,
+        _ => 6
+    };
+
     var vectors = GenerateVectorsOfBaseN(channels, valuesPerChannel);
     var inputs = vectors
         .Select(vector => vector.Select(x => $"{x / ((double)valuesPerChannel - 1)}"))
@@ -122,7 +140,7 @@ void GenerateData(Profile profile, List<string> inputRows, bool deviceToPcs)
         var outputCsvFilename = $"{profile.Name}_{(deviceToPcs ? "DeviceToPcs" : "PcsToDevice")}_Intent{intent}.csv";
         var outputCsvPath = Path.Combine(outputPath, outputCsvFilename);
 
-        var iccFile = Path.Combine(profilesPath, $"{profile.Name}.icc");
+        var iccFile = Path.Combine(inputPath, $"{profile.Name}.icc");
         var arguments = $"-profile=\"{iccFile}\" -deviceToPcs={(deviceToPcs ? "1" : "0")} -intent={intent} -input_file=\"{inputCsvPath}\" -output_file=\"{outputCsvPath}\"";
         
         var process = new Process

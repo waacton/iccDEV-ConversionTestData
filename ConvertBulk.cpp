@@ -51,16 +51,65 @@ int main(int argc, char *argv[]) {
     if (config.isDeviceToPcs()) {
         outputChannels = 3;
     } else {
-        // non-exhaustive; update whenever encountering more exotic profiles
         switch (profile->m_Header.colorSpace) {
-            case icSigCmykData: outputChannels = 4;
-            break;
-            case icSig7colorData: outputChannels = 7;
-            break;
-            case icSigGrayData: outputChannels = 1;
-            break;
-            default: outputChannels = 3;
-            break;
+            case icSigGrayData:
+            case icSig1colorData:
+                outputChannels = 1;
+                break;
+            case icSig2colorData:
+                outputChannels = 2;
+                break;
+            case icSigRgbData:
+            case icSigXYZData:
+            case icSigLabData:
+            case icSigLuvData:
+            case icSigYxyData:
+            case icSigHsvData:
+            case icSigHlsData:
+            case icSigYCbCrData:
+            case icSigCmyData:
+            case icSig3colorData:
+                outputChannels = 3;
+                break;
+            case icSigCmykData:
+            case icSig4colorData:
+                outputChannels = 4;
+                break;
+            case icSig5colorData:
+                outputChannels = 5;
+                break;
+            case icSig6colorData:
+                outputChannels = 6;
+                break;
+            case icSig7colorData:
+                outputChannels = 7;
+                break;
+            case icSig8colorData:
+                outputChannels = 8;
+                break;
+            case icSig9colorData:
+                outputChannels = 9;
+                break;
+            case icSig10colorData:
+                outputChannels = 10;
+                break;
+            case icSig11colorData:
+                outputChannels = 11;
+                break;
+            case icSig12colorData:
+                outputChannels = 12;
+                break;
+            case icSig13colorData:
+                outputChannels = 13;
+                break;
+            case icSig14colorData:
+                outputChannels = 14;
+                break;
+            case icSig15colorData:
+                outputChannels = 15;
+                break;
+            default:
+                throw std::invalid_argument(std::to_string(profile->m_Header.colorSpace) + " is not a supported colour space enum");
         }
     }
 
