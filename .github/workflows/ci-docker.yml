@@ -21,7 +21,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: "docker-${{ github.workflow }}-${{ github.ref }}"
+  group: "docker-${{ github.workflow }}"
   cancel-in-progress: true
 
 jobs:
@@ -51,7 +51,7 @@ jobs:
   build:
     name: "Docker (${{ matrix.variant }})"
     needs: cache-policy
-    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/fix-nixos-image-runtime'
+    if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     environment: ghcr-publish
     timeout-minutes: 30
@@ -83,6 +83,23 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Verify checked out workflow ref
+        env:
+          BASH_ENV: /dev/null
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          git config --global credential.helper ""
+          unset GITHUB_TOKEN || true
+
+          actual_sha="$(git rev-parse HEAD)"
+          if [ "$actual_sha" != "$EXPECTED_SHA" ]; then
+            echo "::error::Checkout SHA mismatch: $actual_sha != $EXPECTED_SHA"
+            exit 1
+          fi
+
+          echo "Building Docker images from ${EXPECTED_SHA}"
+
       - name: Lowercase image name
         id: image
         env:
@@ -106,6 +123,8 @@ jobs:
           printf 'name=ghcr.io/%s/iccdev%s\n' "$owner" "$MATRIX_SUFFIX" >> "$GITHUB_OUTPUT"  # elements-sanitized
 
       - uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5  # v4.1.0
+        with:
+          cache-binary: false
 
       - name: Docker meta
         id: meta
@@ -114,8 +133,7 @@ jobs:
           images: ${{ steps.image.outputs.name }}
           tags: |
             type=sha
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=raw,value=latest,enable=${{ matrix.suffix == '-nixos' }}
+            type=raw,value=latest
 
       - name: Log in to GHCR
         uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee  # v4.2.0
@@ -130,11 +148,15 @@ jobs:
         with:
           context: .
           file: ./${{ matrix.dockerfile }}
-          push: true
           tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
+          no-cache: true
+          pull: true
+          push: true
           provenance: mode=max
           sbom: true
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            org.opencontainers.image.revision=${{ github.sha }}
 
       - name: Generate SBOM
         uses: anchore/sbom-action@63cb575d30b83445769f98c4725d7125db09688f  # v0.22.2
@@ -176,6 +198,24 @@ jobs:
           unset GITHUB_TOKEN || true
           docker pull "${IMAGE_REF}"
           docker tag  "${IMAGE_REF}" "iccdev-${MATRIX_VARIANT}-test:latest"
+
+      - name: Verify image source labels
+        env:
+          BASH_ENV: /dev/null
+          EXPECTED_SHA: ${{ github.sha }}
+          MATRIX_VARIANT: ${{ matrix.variant }}
+        run: |
+          set -euo pipefail
+          git config --global credential.helper ""
+          unset GITHUB_TOKEN || true
+          TEST_IMAGE="iccdev-${MATRIX_VARIANT}-test:latest"
+
+          image_sha="$(docker image inspect "$TEST_IMAGE" \
+            --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
+          if [ "$image_sha" != "$EXPECTED_SHA" ]; then
+            echo "::error::Image revision mismatch: $image_sha != $EXPECTED_SHA"
+            exit 1
+          fi
 
       - name: Scan test image
         env:
