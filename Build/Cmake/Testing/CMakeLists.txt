@@ -251,6 +251,60 @@ function(iccdev_add_cmmsearch_namedcolor_ownership_test)
   endif()
 endfunction()
 
+# Guards CIccXform::Create(CIccProfile*, CIccTag*) profile ownership (#1308):
+# AddXform hands its owned profile to the tag-based Create overload, which must
+# free it when no xform can be built.  The helper feeds a valid profile plus a
+# NULL tag, so Create takes its failure path; a profile it fails to free is
+# unreachable and reported by the ASan/LSan CI job.
+function(iccdev_add_xform_create_tag_ownership_test)
+  if(NOT TARGET "${TARGET_LIB_ICCPROFLIB}")
+    return()
+  endif()
+
+  iccdev_add_regression_executable(iccXformCreateTagOwnershipTest
+    "${ICCDEV_REPO_ROOT}/.github/ci/regression/xform-create-tag-ownership.cpp"
+  )
+  target_link_libraries(iccXformCreateTagOwnershipTest PRIVATE ${TARGET_LIB_ICCPROFLIB})
+  add_dependencies(check iccXformCreateTagOwnershipTest)
+
+  # This regression's pass/fail signal IS the LeakSanitizer at-exit scan, but the
+  # CI tool-test job and ICCDEV_TEST_ENV both export ASAN_OPTIONS=detect_leaks=0
+  # to silence unrelated leaks in the smoke-tested tools.  Inheriting that would
+  # disable LSan here and make the test a false pass even when the profile leaks.
+  # Force leak detection back on for this test's own process by launching it
+  # through `cmake -E env` (the same override mechanism the script tests use; a
+  # CTest ENVIRONMENT property is NOT reliable for ASAN_OPTIONS here).  Set ONLY
+  # detect_leaks=1: do not append halt_on_error=0 -- with halt_on_error=0 the
+  # runtime still prints the leak but exits 0, so ctest would pass on a real
+  # leak.  Plain detect_leaks=1 makes a detected leak exit non-zero (the failure
+  # signal ctest needs).
+  add_test(
+    NAME iccdev.xform-create-tag-ownership
+    COMMAND "${CMAKE_COMMAND}" -E env
+      "ASAN_OPTIONS=detect_leaks=1"
+      "$<TARGET_FILE:iccXformCreateTagOwnershipTest>"
+      "${ICCDEV_TESTING_DIR}/sRGB_v4_ICC_preference.icc"
+  )
+  set_tests_properties(iccdev.xform-create-tag-ownership PROPERTIES
+    WORKING_DIRECTORY "${ICCDEV_REPO_ROOT}"
+    TIMEOUT 60
+    LABELS "iccdev;cmm;xform;leak;issue-1308;regression"
+  )
+  if(WIN32)
+    set(_xform_create_windows_env_mods
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:iccXformCreateTagOwnershipTest>"
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:${TARGET_LIB_ICCPROFLIB}>"
+    )
+    foreach(_runtime_path IN LISTS ICCDEV_WINDOWS_RUNTIME_PATHS)
+      list(APPEND _xform_create_windows_env_mods
+        "PATH=path_list_prepend:${_runtime_path}")
+    endforeach()
+    set_tests_properties(iccdev.xform-create-tag-ownership PROPERTIES
+      ENVIRONMENT_MODIFICATION "${_xform_create_windows_env_mods}"
+    )
+  endif()
+endfunction()
+
 function(iccdev_add_fileio_getlength_position_test)
   if(NOT TARGET "${TARGET_LIB_ICCPROFLIB}")
     return()
@@ -566,6 +620,7 @@ if(WIN32)
   iccdev_add_parser_restore_calls_test()
   iccdev_add_tag_layout_shared_data_test()
   iccdev_add_cmmsearch_namedcolor_ownership_test()
+  iccdev_add_xform_create_tag_ownership_test()
 
   return()
 endif()
@@ -623,6 +678,7 @@ iccdev_add_fileio_seek_tell_test()
 iccdev_add_parser_restore_calls_test()
 iccdev_add_tag_layout_shared_data_test()
 iccdev_add_cmmsearch_namedcolor_ownership_test()
+iccdev_add_xform_create_tag_ownership_test()
 
 function(iccdev_add_script_test NAME TIMEOUT LABELS WORKING_DIRECTORY SCRIPT)
   if(NOT EXISTS "${SCRIPT}")
