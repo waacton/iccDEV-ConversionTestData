@@ -68,13 +68,15 @@
 #include <vector>
 #include <cmath>
 #include "MiniSVG.hpp"
+#include "../IccCmdLineUtil.h"
+#include "errorLog.hpp"
 
 /******************************************************************************/
 
 void SVGOut::OpenFile( const std::string &filename )
 {
   if (!m_filename.empty()) {
-    fprintf(stderr,"WARNING - SVG file already open!\n");
+    LogAnError(stderr,"WARNING - SVG file already open!\n");
   }
   m_GroupLevel = 0;
   m_pageCount = 0;
@@ -94,24 +96,33 @@ void SVGOut::CloseFile()
   }
   
   if (m_GroupLevel > 0)
-    fprintf(stderr,"WARNING - SVG group levels not closed.\n");
+    LogAnError(stderr,"WARNING - SVG group levels not closed.\n");
   if (m_GroupLevel < 0)
-    fprintf(stderr,"WARNING - Too many SVG group levels closed.\n");
+    LogAnError(stderr,"WARNING - Too many SVG group levels closed.\n");
 
   if (!m_filename.empty()) {
     if (m_pageCount > 0) {
       try  {
-        std::ofstream out(m_filename);
+        FILE* checkFile = icOpenRegularWriteTextFile(m_filename.c_str());
+        if (!checkFile || !icFlushAndClose(checkFile)) {
+          LogAnError(stderr, "SVG writing error in '%s': unable to open regular output file\n", m_filename.c_str());
+          m_filename.clear();
+          return;
+        }
+
+        std::ofstream out;
+        out.exceptions(std::ios::badbit | std::ios::failbit);
+        out.open(m_filename);
         WriteHeader(out);
         out << m_buf.str();
         WriteFooter(out);
         out.close();
       }
       catch (const std::exception& e) {
-        fprintf(stderr, "SVG writing error in '%s': '%s'\n", m_filename.c_str(), e.what() );
+        LogAnError(stderr, "SVG writing error in '%s': '%s'\n", m_filename.c_str(), e.what() );
       }
       catch (...) {
-        fprintf(stderr, "SVG writing error in '%s': unknown exception\n", m_filename.c_str());
+        LogAnError(stderr, "SVG writing error in '%s': unknown exception\n", m_filename.c_str());
       }
     }   // if pages > 0
     
@@ -155,7 +166,7 @@ void SVGOut::AddText( const float xCoord, const float yCoord, const std::string 
     else if (align == "right" || align == "Right")
       m_buf << " text-anchor=\"end\"";
     else
-      fprintf(stderr,"WARNING - unknown text alignment %s while exporting SVG\n", align.c_str());
+      LogAnError(stderr,"WARNING - unknown text alignment %s while exporting SVG\n", align.c_str());
     }
 
   float xx = xCoord*mm2point;
@@ -188,7 +199,7 @@ void SVGOut::AddText( const float xCoord, const float yCoord, const std::string 
     else if (style == "Bold Italic")
       m_buf << " font-weight=\"bold\"" << " font-style=\"italic\"";
     else
-      fprintf(stderr,"WARNING - unknown text style %s while exporting SVG\n", style.c_str() );
+      LogAnError(stderr,"WARNING - unknown text style %s while exporting SVG\n", style.c_str() );
     }
 
     m_buf << " font-size=\"" << size << "pt\"";

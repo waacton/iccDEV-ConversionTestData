@@ -378,9 +378,14 @@ bool CIccProfileJson::ParseBasic(const IccJson &header, std::string & /*parseStr
 }
 
 bool CIccProfileJson::ParseTag(const std::string &key, const IccJson &tagValue,
-                               std::map<std::string, icTagSignature> &keyToSig,
+                               KeyToSignatureMap &keyToSig,
                                std::string &parseStr)
 {
+  if (key.empty()) {
+    parseStr += "Tag entry has empty name\n";
+    return false;
+  }
+
   // Determine tag signature from the key name
   icTagSignature sig = CIccTagCreator::GetTagNameSig(key.c_str());
   if (sig == icSigUnknownTag) {
@@ -521,7 +526,7 @@ bool CIccProfileJson::ParseJson(const IccJson &root, std::string &parseStr)
       return false;
     }
 
-    std::map<std::string, icTagSignature> keyToSig;
+    KeyToSignatureMap keyToSig;
     for (const auto &entry : tags) {
       if (!entry.is_object() || entry.size() != 1) {
         parseStr += "Warning: tag entry must be a single-member object, skipping\n";

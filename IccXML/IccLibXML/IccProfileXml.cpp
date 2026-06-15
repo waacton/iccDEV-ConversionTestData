@@ -676,7 +676,14 @@ bool CIccProfileXml::ParseTag(xmlNode *pNode, std::string &parseStr)
 
       if (sigType == icSigUnknownType) {
         attr = icXmlFindAttr(pTypeNode, "type");
-        sigType = (icTagTypeSignature)icGetSigVal((icChar*)icXmlAttrValue(attr));
+        const char *typeSig = icXmlAttrValue(attr);
+        if (!typeSig[0]) {
+          parseStr += "Invalid private tag type attribute for ";
+          parseStr += nodeName;
+          parseStr += "\n";
+          return false;
+        }
+        sigType = (icTagTypeSignature)icGetSigVal(typeSig);
       }
 
       CIccInfo info;
@@ -698,7 +705,16 @@ bool CIccProfileXml::ParseTag(xmlNode *pNode, std::string &parseStr)
           if ((attr = icXmlFindAttr(pTypeNode, "reserved"))) {
             sscanf(icXmlAttrValue(attr), "%x", &pTag->m_nReserved);
           }
-          AttachTag(sigTag, pTag);
+          //AttachTag refuses (and does not take ownership) when a tag with this
+          //signature already exists; free pTag to avoid a leak on duplicates.
+          if (!AttachTag(sigTag, pTag)) {
+            parseStr += "Unable to attach duplicate tag \"";
+            parseStr += nodeName;
+            snprintf(str, strSize, "\" on line %d\n", pTypeNode->line);
+            parseStr += str;
+            delete pTag;
+            return false;
+          }
         }
         else {
           parseStr += "Unable to Parse \"";
@@ -729,7 +745,14 @@ bool CIccProfileXml::ParseTag(xmlNode *pNode, std::string &parseStr)
 
     if (sigType == icSigUnknownType) {
       attr = icXmlFindAttr(pNode, "type");
-      sigType = (icTagTypeSignature)icGetSigVal((icChar*)icXmlAttrValue(attr));
+      const char *typeSig = icXmlAttrValue(attr);
+      if (!typeSig[0]) {
+        parseStr += "Invalid private tag type attribute for ";
+        parseStr += nodeName;
+        parseStr += "\n";
+        return false;
+      }
+      sigType = (icTagTypeSignature)icGetSigVal(typeSig);
     }
 
     CIccInfo info;
@@ -752,13 +775,24 @@ bool CIccProfileXml::ParseTag(xmlNode *pNode, std::string &parseStr)
           sscanf(icXmlAttrValue(attr), "%u", &pTag->m_nReserved);
         }
 
+        bool bAttached = false;
         for (xmlNode *tagSigNode = pNode->children; tagSigNode; tagSigNode = tagSigNode->next) {
           if (tagSigNode->type == XML_ELEMENT_NODE && !icXmlStrCmp(tagSigNode->name, "TagSignature")) {
             if ((const icChar*)tagSigNode->children != NULL) {
               sigTag = (icTagSignature)icGetSigVal((const icChar*)tagSigNode->children->content);
-              AttachTag(sigTag, pTag);
+              //Only flag ownership transfer when AttachTag actually accepts pTag.
+              //It refuses duplicate signatures without taking ownership, so a
+              //blanket bAttached=true here would leak pTag on a duplicate tag.
+              if (AttachTag(sigTag, pTag))
+                bAttached = true;
             }
           }
+        }
+
+        //No TagSignature node claimed ownership of pTag; free it to avoid a leak
+        if (!bAttached) {
+          delete pTag;
+          return false;
         }
       }
       else {

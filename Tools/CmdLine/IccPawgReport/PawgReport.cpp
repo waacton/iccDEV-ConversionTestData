@@ -638,8 +638,139 @@ std::string FirstReportLine(const std::string &report)
   return "validation reported an issue without detail";
 }
 
+typedef bool (*SigValidator)(const RawProfile &raw, size_t offset, size_t end);
+
+bool ValidatePe(const RawProfile &raw, size_t offset, size_t end)
+{
+  if (offset > end || end - offset < 64) {
+    return false;
+  }
+
+  uint32_t peOff = (uint32_t)raw.data[offset + 60] |
+                   ((uint32_t)raw.data[offset + 61] << 8) |
+                   ((uint32_t)raw.data[offset + 62] << 16) |
+                   ((uint32_t)raw.data[offset + 63] << 24);
+  return peOff < 1024 && peOff <= end - offset - 4 &&
+         raw.data[offset + peOff] == 'P' && raw.data[offset + peOff + 1] == 'E';
+}
+
+bool ValidateGzipHeader(const RawProfile &raw, size_t offset, size_t end)
+{
+  const size_t kGzipHeaderLen = 10;
+  if (offset > end || end - offset < kGzipHeaderLen) {
+    return false;
+  }
+
+  const unsigned char cm = raw.data[offset + 2];
+  const unsigned char flg = raw.data[offset + 3];
+  const unsigned char xfl = raw.data[offset + 8];
+  const unsigned char os = raw.data[offset + 9];
+  if (cm != 0x08 || (flg & 0xe0) != 0 || !(xfl == 0 || xfl == 2 || xfl == 4) ||
+      !(os <= 13 || os == 255)) {
+    return false;
+  }
+
+  size_t pos = offset + kGzipHeaderLen;
+  if (flg & 0x04) {
+    if (end - pos < 2) {
+      return false;
+    }
+    const size_t extraLen = (size_t)raw.data[pos] | ((size_t)raw.data[pos + 1] << 8);
+    pos += 2;
+    if (extraLen > end - pos) {
+      return false;
+    }
+    pos += extraLen;
+  }
+  if (flg & 0x08) {
+    while (pos < end && raw.data[pos] != 0) {
+      ++pos;
+    }
+    if (pos >= end) {
+      return false;
+    }
+    ++pos;
+  }
+  if (flg & 0x10) {
+    while (pos < end && raw.data[pos] != 0) {
+      ++pos;
+    }
+    if (pos >= end) {
+      return false;
+    }
+    ++pos;
+  }
+  if (flg & 0x02) {
+    if (end - pos < 2) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+bool ValidateElf(const RawProfile &raw, size_t offset, size_t end)
+{
+  // Corroborate a "\x7fELF" hit against the ELF identification fields (e_ident)
+  // plus e_type/e_version, so a coincidental 4-byte match in high-entropy CLUT
+  // data does not fire S8. Need e_ident(16) + e_type(2) + e_machine(2) +
+  // e_version(4) = 24 bytes.
+  if (offset > end || end - offset < 24) {
+    return false;
+  }
+
+  const unsigned char eiClass = raw.data[offset + 4];    // 1=32-bit, 2=64-bit
+  const unsigned char eiData = raw.data[offset + 5];     // 1=little, 2=big endian
+  const unsigned char eiVersion = raw.data[offset + 6];  // EV_CURRENT == 1
+  if (!(eiClass == 1 || eiClass == 2) || !(eiData == 1 || eiData == 2) ||
+      eiVersion != 1) {
+    return false;
+  }
+
+  const bool be = (eiData == 2);
+  const unsigned char *p = raw.data.data() + offset;
+  const uint16_t eType = be ? (uint16_t)((p[16] << 8) | p[17])
+                            : (uint16_t)(p[16] | (p[17] << 8));
+  const uint32_t eVersion = be
+    ? ((uint32_t)p[20] << 24 | (uint32_t)p[21] << 16 |
+       (uint32_t)p[22] << 8 | (uint32_t)p[23])
+    : ((uint32_t)p[20] | (uint32_t)p[21] << 8 |
+       (uint32_t)p[22] << 16 | (uint32_t)p[23] << 24);
+
+  // e_type: NONE/REL/EXEC/DYN/CORE (0-4), or the OS/processor-specific reserved
+  // ranges (0xfe00-0xffff). e_version must be EV_CURRENT.
+  const bool typeOk = eType <= 4 || (eType >= 0xfe00);  // && eType <= 0xffff implied by data type
+  return typeOk && eVersion == 1;
+}
+
+bool ValidateShebang(const RawProfile &raw, size_t offset, size_t end)
+{
+  // The magic is "#!/" (3 bytes). A real shebang continues with a printable
+  // interpreter path terminated by a newline; a coincidental "#!/" inside binary
+  // CLUT data is followed by non-printable bytes well before any newline.
+  const size_t kMaxLine = 256;
+  size_t limit = end;
+  if (limit - offset > kMaxLine) {
+    limit = offset + kMaxLine;
+  }
+  for (size_t pos = offset + 3; pos < limit; ++pos) {
+    const unsigned char c = raw.data[pos];
+    if (c == '\n') {
+      return true;  // a fully-printable interpreter line
+    }
+    if (c == '\t' || c == '\r') {
+      continue;
+    }
+    if (c < 0x20 || c > 0x7e) {
+      return false;  // control/binary byte => not a script line
+    }
+  }
+  return false;  // no newline within a plausible interpreter-line length
+}
+
 bool HasSignature(const RawProfile &raw, const unsigned char *sig, size_t sigLen,
-                  size_t begin, size_t end, std::string &detail)
+                  SigValidator validate, size_t begin, size_t end,
+                  std::string &detail)
 {
   if (sigLen == 0 || begin >= end || end > raw.data.size()) {
     return false;
@@ -650,18 +781,8 @@ bool HasSignature(const RawProfile &raw, const unsigned char *sig, size_t sigLen
       continue;
     }
 
-    if (sigLen == 2 && sig[0] == 'M') {
-      if (i + 64 > end) {
-        continue;
-      }
-      uint32_t peOff = (uint32_t)raw.data[i + 60] |
-                       ((uint32_t)raw.data[i + 61] << 8) |
-                       ((uint32_t)raw.data[i + 62] << 16) |
-                       ((uint32_t)raw.data[i + 63] << 24);
-      if (peOff >= 1024 || i + peOff + 4 > end ||
-          raw.data[i + peOff] != 'P' || raw.data[i + peOff + 1] != 'E') {
-        continue;
-      }
+    if (validate && !validate(raw, i, end)) {
+      continue;
     }
 
     char msg[96];
@@ -691,6 +812,31 @@ bool HasAsciiSignatureCaseInsensitive(const RawProfile &raw, const char *sig,
       }
     }
     if (matched) {
+      // Corroborate: these signatures are dangerous only as text, so a genuine
+      // hit sits inside printable content (embedded script/markup/command line).
+      // A coincidental case-insensitive match inside binary CLUT data has little
+      // or no printable context -- require adjacent printable bytes before/after.
+      const size_t kMinContext = 16;
+      size_t printableBefore = 0;
+      for (size_t k = i; k > begin && printableBefore < kMinContext; --k) {
+        const unsigned char c = raw.data[k - 1];
+        if (c != '\t' && c != '\n' && c != '\r' && (c < 0x20 || c > 0x7e)) {
+          break;
+        }
+        ++printableBefore;
+      }
+      size_t printableAfter = 0;
+      for (size_t k = i + sigLen; k < end && printableAfter < kMinContext; ++k) {
+        const unsigned char c = raw.data[k];
+        if (c != '\t' && c != '\n' && c != '\r' && (c < 0x20 || c > 0x7e)) {
+          break;
+        }
+        ++printableAfter;
+      }
+      if (printableBefore + printableAfter < kMinContext) {
+        continue;
+      }
+
       char msg[96];
       std::snprintf(msg, sizeof(msg), "signature at offset 0x%zx", i);
       detail = msg;
@@ -718,25 +864,26 @@ bool ScanMalwareRange(const RawProfile &raw, size_t begin, size_t end,
     const unsigned char *bytes;
     size_t len;
     const char *name;
+    SigValidator validate;
   };
   static const Sig sigs[] = {
-    {elf, sizeof(elf), "ELF executable"},
-    {mz, sizeof(mz), "PE executable"},
-    {macho64, sizeof(macho64), "Mach-O executable"},
-    {macho32, sizeof(macho32), "Mach-O executable"},
-    {shebang, sizeof(shebang), "script shebang"},
-    {pdf, sizeof(pdf), "embedded PDF"},
-    {zip, sizeof(zip), "embedded ZIP archive"},
-    {rar, sizeof(rar), "embedded RAR archive"},
-    {sevenZip, sizeof(sevenZip), "embedded 7z archive"},
-    {gzip, sizeof(gzip), "embedded gzip stream"}
+    {elf, sizeof(elf), "ELF executable", ValidateElf},
+    {mz, sizeof(mz), "PE executable", ValidatePe},
+    {macho64, sizeof(macho64), "Mach-O executable", nullptr},
+    {macho32, sizeof(macho32), "Mach-O executable", nullptr},
+    {shebang, sizeof(shebang), "script shebang", ValidateShebang},
+    {pdf, sizeof(pdf), "embedded PDF", nullptr},
+    {zip, sizeof(zip), "embedded ZIP archive", nullptr},
+    {rar, sizeof(rar), "embedded RAR archive", nullptr},
+    {sevenZip, sizeof(sevenZip), "embedded 7z archive", nullptr},
+    {gzip, sizeof(gzip), "embedded gzip stream", ValidateGzipHeader}
   };
 
   const size_t kMaxScan = (size_t)10 * 1024 * 1024;
   size_t scanEnd = std::min(end, begin + kMaxScan);
   for (const Sig &sig : sigs) {
     std::string offset;
-    if (HasSignature(raw, sig.bytes, sig.len, begin, scanEnd, offset)) {
+    if (HasSignature(raw, sig.bytes, sig.len, sig.validate, begin, scanEnd, offset)) {
       detail = std::string(sig.name) + " " + offset;
       return true;
     }
@@ -1076,7 +1223,12 @@ bool ContainsTag(const icTagSignature *tags, size_t count, icTagSignature sig)
 
 bool HasAnyRequiredAlternative(CIccProfile *pIcc, const RuleTable &rule)
 {
-  for (size_t i = 0; i < rule.alternativeCount; ++i) {
+  // CWE-400/CWE-834: the RuleTable entries are static, trusted definitions whose
+  // alternative[] arrays hold only a handful of tags; clamp to an explicit upper
+  // bound so the walk can never run unbounded if a count is ever miswired.
+  const size_t nMaxRuleTags = 64;
+  size_t nAlt = (rule.alternativeCount > nMaxRuleTags) ? nMaxRuleTags : rule.alternativeCount;
+  for (size_t i = 0; i < nAlt; ++i) {
     if (HasTag(pIcc, rule.alternative[i])) {
       return true;
     }
@@ -1197,7 +1349,12 @@ bool HasRequiredTags(CIccProfile *pIcc, std::string &detail)
     }
   };
 
-  for (size_t i = 0; i < rule->requiredCount; ++i) {
+  // CWE-400/CWE-834: the RuleTable entries are static, trusted definitions whose
+  // required[] arrays hold only a handful of tags; clamp to an explicit upper bound
+  // so the walk can never run unbounded if a count is ever miswired.
+  const size_t nMaxRuleTags = 64;
+  size_t nReq = (rule->requiredCount > nMaxRuleTags) ? nMaxRuleTags : rule->requiredCount;
+  for (size_t i = 0; i < nReq; ++i) {
     requireTag(rule->required[i], SigString(rule->required[i]).c_str());
   }
 
@@ -2046,7 +2203,8 @@ const char *SectionName(char prefix)
 std::string JsonEscape(const std::string &s)
 {
   std::ostringstream oss;
-  for (unsigned char ch : s) {
+  for (size_t i = 0; i < s.size(); i++) {
+    unsigned char ch = static_cast<unsigned char>(s[i]);
     switch (ch) {
       case '\\':
         oss << "\\\\";

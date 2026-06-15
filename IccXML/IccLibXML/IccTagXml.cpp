@@ -84,8 +84,30 @@ typedef  std::map<icUInt32Number, icTagSignature> IccOffsetTagSigMap;
 namespace iccDEV {
 #endif
 
+// Parse a non-negative integer XML attribute value.
+//
+// atoi() returns a signed int, but the ParseXml handlers below store these
+// attributes into unsigned icUIntNN members/locals.  A negative attribute
+// therefore used to wrap to a huge unsigned value -- either implicitly (caught
+// by UBSan's implicit-integer-sign-change, e.g. #1342/#1343) or silently behind
+// an explicit (icUIntNN) cast (invisible to UBSan).  This helper centralizes
+// the fix: any negative (invalid) input is floored to 0 so the stored value is
+// always well-defined.
+//
+// Usage: replace `atoi(icXmlAttrValue(...))` with
+// `icXmlAttrToUInt(icXmlAttrValue(...))`.  The helper returns the widest
+// unsigned type (icUInt32Number); callers that target an 8- or 16-bit member
+// keep their explicit (icUInt8Number)/(icUInt16Number) cast exactly as before,
+// which both narrows the value and suppresses the implicit-integer-truncation
+// check, so no behavior other than the negative-wrap is changed (#1346).
+static icUInt32Number icXmlAttrToUInt(const char *szValue)
+{
+  int nValue = atoi(szValue);
+  return nValue < 0 ? 0u : (icUInt32Number)nValue;
+}
 
-bool CIccTagXmlUnknown::ToXml(std::string &xml, std::string blanks/* = ""*/) 
+
+bool CIccTagXmlUnknown::ToXml(std::string &xml, std::string blanks/* = ""*/)
 {
   xml += blanks + "<UnknownData>\n";
   icXmlDumpHexData(xml, blanks+" ", m_pData, m_nSize);
@@ -793,7 +815,7 @@ bool CIccTagXmlSpectralDataInfo::ParseXml(xmlNode *pNode, std::string &parseStr)
 
   m_spectralRange.start = icFtoF16((icFloatNumber)atof(icXmlAttrValue(pChild, "start")));
   m_spectralRange.end = icFtoF16((icFloatNumber)atof(icXmlAttrValue(pChild, "end")));
-  m_spectralRange.steps = (icUInt16Number)atoi(icXmlAttrValue(pChild, "steps"));
+  m_spectralRange.steps = (icUInt16Number)icXmlAttrToUInt(icXmlAttrValue(pChild, "steps"));
 
   pChild = icXmlFindNode(pNode, "BiSpectralRange");
 
@@ -801,7 +823,7 @@ bool CIccTagXmlSpectralDataInfo::ParseXml(xmlNode *pNode, std::string &parseStr)
     if ((pChild = icXmlFindNode(pChild->children, "Wavelengths"))) {
       m_biSpectralRange.start = icFtoF16((icFloatNumber)atof(icXmlAttrValue(pChild, "start")));
       m_biSpectralRange.end = icFtoF16((icFloatNumber)atof(icXmlAttrValue(pChild, "end")));
-      m_biSpectralRange.steps = (icUInt16Number)atoi(icXmlAttrValue(pChild, "steps"));
+      m_biSpectralRange.steps = (icUInt16Number)icXmlAttrToUInt(icXmlAttrValue(pChild, "steps"));
     }
   }
 
@@ -1015,8 +1037,15 @@ bool CIccTagXmlNamedColor2::ParseXml(xmlNode *pNode, std::string & /*parseStr*/)
                 coords.ParseArray(pNode->children);
                 icFloatNumber *pBuf = coords.GetBuf();
 
+                // CWE-400/CWE-834: m_nDeviceCoords is capped at
+                // kMaxNamedColorDeviceCoords on load and sizes deviceCoords[];
+                // clamp to that bound so a corrupted count can't drive an
+                // unbounded or out-of-range copy.
+                const icUInt32Number kMaxNamedColorDeviceCoords = 256;
+                icUInt32Number nDevCoords = (m_nDeviceCoords > kMaxNamedColorDeviceCoords)
+                                              ? kMaxNamedColorDeviceCoords : m_nDeviceCoords;
                 icUInt32Number j;
-                for (j = 0; j < m_nDeviceCoords && j < coords.GetSize(); j++) {
+                for (j = 0; j < nDevCoords && j < coords.GetSize(); j++) {
                   pNamedColor->deviceCoords[j] = (icFloatNumber)pBuf[j];
                 }
               }
@@ -1162,22 +1191,22 @@ bool CIccTagXmlCicp::ParseXml(xmlNode* pNode, std::string& /*parseStr*/)
   if (pNode) {
     xmlAttr* attr;
     if ((attr = icXmlFindAttr(pNode, "ColorPrimaries")))
-      m_nColorPrimaries = atoi(icXmlAttrValue(attr));
+      m_nColorPrimaries = (icUInt8Number)icXmlAttrToUInt(icXmlAttrValue(attr));
     else
       m_nColorPrimaries = 0;
 
     if ((attr = icXmlFindAttr(pNode, "TransferCharacteristics")))
-      m_nTransferCharacteristics = atoi(icXmlAttrValue(attr));
+      m_nTransferCharacteristics = (icUInt8Number)icXmlAttrToUInt(icXmlAttrValue(attr));
     else
       m_nTransferCharacteristics = 0;
 
     if ((attr = icXmlFindAttr(pNode, "MatrixCoefficients")))
-      m_nMatrixCoefficients = atoi(icXmlAttrValue(attr));
+      m_nMatrixCoefficients = (icUInt8Number)icXmlAttrToUInt(icXmlAttrValue(attr));
     else
       m_nMatrixCoefficients = 0;
 
     if ((attr = icXmlFindAttr(pNode, "VideoFullRangeFlag")))
-      m_nVideoFullRangeFlag = atoi(icXmlAttrValue(attr));
+      m_nVideoFullRangeFlag = (icUInt8Number)icXmlAttrToUInt(icXmlAttrValue(attr));
     else
       m_nVideoFullRangeFlag = 0;
   }
@@ -1199,6 +1228,13 @@ bool CIccTagXmlSparseMatrixArray::ToXml(std::string &xml, std::string blanks/* =
 
   CIccSparseMatrix mtx;
   icUInt32Number bytesPerMatrix = GetBytesPerMatrix();
+
+  // CWE-400/CWE-834: m_nSize is bounded by the tag byte size in Read() and m_RawData
+  // is allocated to m_nSize*bytesPerMatrix; assert an explicit upper limit so a
+  // corrupted count can't drive an unbounded serialization walk.
+  const icUInt32Number nMaxMatrices = 0xffffff;
+  if (m_nSize > nMaxMatrices)
+    return false;
 
   for (i=0; i<(int)m_nSize; i++) {
     if (!mtx.Reset(m_RawData+i*bytesPerMatrix, bytesPerMatrix, icSparseMatrixFloatNum, true) ||
@@ -1242,7 +1278,7 @@ bool CIccTagXmlSparseMatrixArray::ParseXml(xmlNode *pNode, std::string &parseStr
     xmlAttr *matrixType = icXmlFindAttr(pNode, "matrixType");
 
     if (outputChan && matrixType) {
-      icUInt32Number nChannelsPerMatrix = atoi(icXmlAttrValue(outputChan));
+      icUInt32Number nChannelsPerMatrix = icXmlAttrToUInt(icXmlAttrValue(outputChan));
       icSparseMatrixType nMatrixType = (icSparseMatrixType)atoi(icXmlAttrValue(matrixType));
 
       xmlNode *pChild;
@@ -1271,8 +1307,8 @@ bool CIccTagXmlSparseMatrixArray::ParseXml(xmlNode *pNode, std::string &parseStr
             if (rows && cols) {
               icUInt16Number nRows, nCols;
 
-              nRows = atoi(icXmlAttrValue(rows));
-              nCols = atoi(icXmlAttrValue(cols));
+              nRows = (icUInt16Number)icXmlAttrToUInt(icXmlAttrValue(rows));
+              nCols = (icUInt16Number)icXmlAttrToUInt(icXmlAttrValue(cols));
 
               mtx.Init(nRows, nCols, true);
 
@@ -1332,8 +1368,8 @@ bool CIccTagXmlSparseMatrixArray::ParseXml(xmlNode *pNode, std::string &parseStr
             if (rows && cols) {
               icUInt16Number nRows, nCols;
 
-              nRows = atoi(icXmlAttrValue(rows));
-              nCols = atoi(icXmlAttrValue(cols));
+              nRows = (icUInt16Number)icXmlAttrToUInt(icXmlAttrValue(rows));
+              nCols = (icUInt16Number)icXmlAttrToUInt(icXmlAttrValue(cols));
 
               mtx.Init(nRows, nCols, true);
 
@@ -1387,6 +1423,13 @@ bool CIccTagXmlFixedNum<T, Tsig>::ToXml(std::string &xml, std::string blanks/* =
   const size_t bufSize = 256;
   char buf[bufSize];
   int i;
+
+  // CWE-400/CWE-834: m_nSize is bounded by the tag byte size in Read() and m_Num is
+  // allocated to match; assert an explicit upper limit so a corrupted count can't
+  // drive an unbounded serialization walk.
+  const icUInt32Number nMaxNumValues = 0xffffff;
+  if (this->m_nSize > nMaxNumValues)
+    return false;
 
   if (Tsig==icSigS15Fixed16ArrayType) {
     int n = 8;
@@ -1966,6 +2009,12 @@ bool CIccTagXmlColorantOrder::ToXml(std::string &xml, std::string blanks/* = ""*
   char buf[bufSize];
 
   xml += blanks + "<ColorantOrder>\n"; //+ blanks + "  ";
+  // CWE-400/CWE-834: SetSize() caps the colorant count at 0xffff and allocates
+  // m_pData to match; assert that bound locally so the serialization walk has an
+  // explicit upper limit.
+  const icUInt32Number nMaxColorants = 0xffff;
+  if (m_nCount > nMaxColorants)
+    return false;
   for (icUInt32Number i=0; i<m_nCount; i++) {
     snprintf(buf, bufSize, "  <n>%d</n>\n", m_pData[i]);
     xml += blanks + buf;
@@ -2004,6 +2053,12 @@ bool CIccTagXmlColorantTable::ToXml(std::string &xml, std::string blanks/* = ""*
   std::string str;
 
   xml += blanks + "<ColorantTable>\n";
+  // CWE-400/CWE-834: SetSize() caps the colorant count at 0xffff and allocates
+  // m_pData to match; assert that bound locally so the serialization walk has an
+  // explicit upper limit.
+  const icUInt32Number nMaxColorants = 0xffff;
+  if (m_nCount > nMaxColorants)
+    return false;
   for (icUInt32Number i=0; i<m_nCount; i++) {
     icFloatNumber lab[3];
     lab[0] = icU16toF(m_pData[i].data[0]);
@@ -2282,12 +2337,19 @@ bool CIccTagXmlSpectralViewingConditions::ParseXml(xmlNode *pNode, std::string &
     }
     attr = icXmlFindAttr(pChild, "steps");
     if (attr) {
-      m_observerRange.steps = (icUInt16Number)atoi(icXmlAttrValue(attr));
+      int tempSteps = atoi(icXmlAttrValue(attr));
+      if (tempSteps <= 0 || tempSteps > 0xffff)
+        return false;
+      m_observerRange.steps = (icUInt16Number)tempSteps;
     }
     attr = icXmlFindAttr(pChild, "reserved");
     if (attr) {
-      m_reserved2 = (icUInt16Number)atoi(icXmlAttrValue(attr));
+      m_reserved2 = (icUInt16Number)icXmlAttrToUInt(icXmlAttrValue(attr));
     }
+    
+    // if these are not set correctly, then later allocations and calculations WILL fail
+    if (m_observerRange.start == 0 || m_observerRange.end == 0 || m_observerRange.steps == 0)
+      return false;
 
     if (pChild->children && pChild->children->content) {
       CIccFloatArray vals;
@@ -2298,6 +2360,8 @@ bool CIccTagXmlSpectralViewingConditions::ParseXml(xmlNode *pNode, std::string &
       if (!m_observer)
         return false;
       icFloatNumber *pBuf = vals.GetBuf();
+      if (!pBuf)
+        return false;
       memcpy(m_observer, pBuf, m_observerRange.steps*3*sizeof(icFloatNumber));
     }
     else {
@@ -2327,14 +2391,21 @@ bool CIccTagXmlSpectralViewingConditions::ParseXml(xmlNode *pNode, std::string &
     }
     attr = icXmlFindAttr(pChild, "steps");
     if (attr) {
-      m_illuminantRange.steps = (icUInt16Number)atoi(icXmlAttrValue(attr));
+      int tempSteps = atoi(icXmlAttrValue(attr));
+      if (tempSteps <= 0 || tempSteps > 0xffff)
+        return false;
+      m_illuminantRange.steps = (icUInt16Number)tempSteps;
     }
     attr = icXmlFindAttr(pChild, "reserved");
     if (attr) {
-      m_reserved3 = (icUInt16Number)atoi(icXmlAttrValue(attr));
+      m_reserved3 = (icUInt16Number)icXmlAttrToUInt(icXmlAttrValue(attr));
     }
+    
+    // if these are not set correctly, then later allocations and calculations WILL fail
+    if (m_illuminantRange.start == 0 || m_illuminantRange.end == 0 || m_illuminantRange.steps == 0)
+      return false;
 
-    if (pChild->children && pChild->children->content && m_illuminantRange.steps) {
+    if (pChild->children && pChild->children->content) {
       CIccFloatArray vals;
       vals.ParseTextArray((icChar*)pChild->children->content);
       if (vals.GetSize()!=m_illuminantRange.steps)
@@ -2343,6 +2414,8 @@ bool CIccTagXmlSpectralViewingConditions::ParseXml(xmlNode *pNode, std::string &
       if (!m_illuminant)
         return false;
       icFloatNumber *pBuf = vals.GetBuf();
+      if (!pBuf)
+        return false;
       memcpy(m_illuminant, pBuf, m_illuminantRange.steps * sizeof(icFloatNumber));
     }
     else {
@@ -3313,7 +3386,7 @@ bool CIccTagXmlParametricCurve::ParseXml(xmlNode *pNode, std::string & /*parseSt
         xmlAttr *reserved2 = icXmlFindAttr(pCurveNode, "Reserved");
 
         if (reserved2) {
-          m_nReserved2 = (icUInt16Number)atoi(icXmlAttrValue(reserved2));
+          m_nReserved2 = (icUInt16Number)icXmlAttrToUInt(icXmlAttrValue(reserved2));
         }
         return true;
       }
@@ -3661,7 +3734,7 @@ CIccCLUT *icCLutFromXml(xmlNode *pNode, int nIn, int nOut, icConvertType nType, 
     xmlAttr *gridGranularity = icXmlFindAttr(pNode, "GridGranularity");
 
     if (gridGranularity) {
-      nGridGranularity = (icUInt8Number)atoi(icXmlAttrValue(gridGranularity));
+      nGridGranularity = (icUInt8Number)icXmlAttrToUInt(icXmlAttrValue(gridGranularity));
     }
     else {
       delete pCLUT;
@@ -4437,8 +4510,8 @@ bool CIccTagXmlMultiProcessElement::ParseXml(xmlNode *pNode, std::string &parseS
     return false;
   }
 
-  m_nInputChannels = atoi(icXmlAttrValue(pInputChannels));
-  m_nOutputChannels = atoi(icXmlAttrValue(pOutputChannels));
+  m_nInputChannels = (icUInt16Number)icXmlAttrToUInt(icXmlAttrValue(pInputChannels));
+  m_nOutputChannels = (icUInt16Number)icXmlAttrToUInt(icXmlAttrValue(pOutputChannels));
 
   if (!m_list) {
     m_list = new (std::nothrow) CIccMultiProcessElementList();
@@ -4918,7 +4991,14 @@ bool CIccTagXmlStruct::ParseTag(xmlNode *pNode, std::string &parseStr)
 
       if (sigType == icSigUnknownType) {
         attr = icXmlFindAttr(pTypeNode, "type");
-        sigType = (icTagTypeSignature)icGetSigVal((icChar*)icXmlAttrValue(attr));
+        const char *typeSig = icXmlAttrValue(attr);
+        if (!typeSig[0]) {
+          parseStr += "Invalid private tag type attribute for ";
+          parseStr += nodeName;
+          parseStr += "\n";
+          return false;
+        }
+        sigType = (icTagTypeSignature)icGetSigVal(typeSig);
       }
 
       CIccInfo info;
@@ -4972,7 +5052,14 @@ bool CIccTagXmlStruct::ParseTag(xmlNode *pNode, std::string &parseStr)
 
     if (sigType == icSigUnknownType) {
       attr = icXmlFindAttr(pNode, "type");
-      sigType = (icTagTypeSignature)icGetSigVal((icChar*)icXmlAttrValue(attr));
+      const char *typeSig = icXmlAttrValue(attr);
+      if (!typeSig[0]) {
+        parseStr += "Invalid private tag type attribute for ";
+        parseStr += nodeName;
+        parseStr += "\n";
+        return false;
+      }
+      sigType = (icTagTypeSignature)icGetSigVal(typeSig);
     }
 
     CIccInfo info;
@@ -5330,7 +5417,7 @@ bool CIccTagXmlGamutBoundaryDesc::ParseXml(xmlNode *pNode, std::string &parseStr
   subNode = icXmlFindNode(childNode->children, "PCSValues");
 
   if (subNode) {
-    m_nPCSChannels = atoi(icXmlAttrValue(subNode, "channels", "0"));
+    m_nPCSChannels = (icUInt16Number)icXmlAttrToUInt(icXmlAttrValue(subNode, "channels", "0"));
 
     if (!m_nPCSChannels) {
       parseStr += "Bad PCSValues channels\n";
@@ -5366,7 +5453,7 @@ bool CIccTagXmlGamutBoundaryDesc::ParseXml(xmlNode *pNode, std::string &parseStr
   subNode = icXmlFindNode(childNode->children, "DeviceValues");
 
   if (subNode) {
-    m_nDeviceChannels = atoi(icXmlAttrValue(subNode, "channels", "0"));
+    m_nDeviceChannels = (icUInt16Number)icXmlAttrToUInt(icXmlAttrValue(subNode, "channels", "0"));
 
     if (!m_nDeviceChannels) {
       parseStr += "Bad DeviceValues channels\n";
@@ -5480,7 +5567,14 @@ bool CIccTagXmlEmbeddedHeightImage::ParseXml(xmlNode *pNode, std::string &parseS
   if (!tagNode)
     return false;
 
-  m_nSeamlesIndicator = atoi(icXmlAttrValue(tagNode, "SeamlessIndicator", "0"));
+  // SeamlessIndicator is stored as an unsigned 32-bit indicator (the binary
+  // Read() path uses Read32).  atoi() returns a signed int, so a negative XML
+  // attribute used to wrap to a huge unsigned value through the implicit
+  // int -> icUInt32Number conversion (#1342).  The value is now parsed into a
+  // signed temporary and any negative (invalid) input is floored to 0, so the
+  // stored indicator is always a well-defined non-negative number.
+  int nSeamlessIndicator = atoi(icXmlAttrValue(tagNode, "SeamlessIndicator", "0"));
+  m_nSeamlesIndicator = nSeamlessIndicator < 0 ? 0 : (icUInt32Number)nSeamlessIndicator;
   m_nEncodingFormat = (icImageEncodingType)atoi(icXmlAttrValue(tagNode, "EncodingFormat", "0"));
   m_fMetersMinPixelValue = (icFloatNumber)atof(icXmlAttrValue(tagNode, "MetersMinPixelValue", "0.0"));
   m_fMetersMaxPixelValue = (icFloatNumber)atof(icXmlAttrValue(tagNode, "MetersMaxPixelValue", "0.0"));
@@ -5583,7 +5677,14 @@ bool CIccTagXmlEmbeddedNormalImage::ParseXml(xmlNode *pNode, std::string &parseS
   if (!tagNode)
     return false;
 
-  m_nSeamlesIndicator = atoi(icXmlAttrValue(tagNode, "SeamlessIndicator", "0"));
+  // SeamlessIndicator is stored as an unsigned 32-bit indicator (the binary
+  // Read() path uses Read32).  atoi() returns a signed int, so a negative XML
+  // attribute used to wrap to a huge unsigned value through the implicit
+  // int -> icUInt32Number conversion (#1343).  The value is now parsed into a
+  // signed temporary and any negative (invalid) input is floored to 0, so the
+  // stored indicator is always a well-defined non-negative number.
+  int nSeamlessIndicator = atoi(icXmlAttrValue(tagNode, "SeamlessIndicator", "0"));
+  m_nSeamlesIndicator = nSeamlessIndicator < 0 ? 0 : (icUInt32Number)nSeamlessIndicator;
   m_nEncodingFormat = (icImageEncodingType)atoi(icXmlAttrValue(tagNode, "EncodingFormat", "0"));
 
   xmlNode *pImageNode;

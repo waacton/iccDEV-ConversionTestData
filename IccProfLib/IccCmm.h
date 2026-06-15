@@ -131,7 +131,26 @@ typedef enum {
   icXformLutMCS                = 0x8,
   icXformLutColorimetric       = 0x9,
   icXformLutSpectral           = 0xA,
+  icXformLutNamedColorimetric  = 0xB,
+  icXformLutNamedSpectral      = 0xC,
+  icXformLutNamedDevice        = 0xD,
  } icXformLutType;
+
+  // Note: Named-color variants that pin which member of a v5 NamedColor
+  // array the name->space apply path reads:
+  //   icXformLutNamedColorimetric -- reads icSigNmclPcsDataMbr; fails
+  //     with icCmmStatBadTintXform if the matched entry has none.
+  //   icXformLutNamedSpectral     -- reads the spectral member chosen
+  //     by the overprint hint ('spec' / 'spcb' / 'spcg'); fails with
+  //     icCmmStatBadTintXform if that member is absent.
+  //   icXformLutNamedDevice       -- reads icSigNmclDeviceDataMbr; the
+  //     xform's destination is the profile's colorSpace.  Fails with
+  //     icCmmStatBadTintXform if the matched entry has no device
+  //     member, or if the profile declares no colorSpace.
+  // Plain icXformLutNamedColor leaves the colorimetric/spectral choice
+  // to the bUseD2BxB2Dx / spectralPCS-presence heuristic in
+  // CIccNamedColorCmm::AddXform.
+
 
 #define icPerceptualRefBlackX 0.00336
 #define icPerceptualRefBlackY 0.0034731
@@ -339,6 +358,7 @@ public:
 
 //forward reference to CIccXform used by CIccApplyXform
 class CIccApplyXform;
+class CIccMatrixMath;
 
 /**
  **************************************************************************
@@ -360,14 +380,20 @@ public:
 
   virtual icXformType GetXformType() const = 0;
 
-  ///Note: The returned CIccXform will own the profile.
-  static CIccXform *Create(CIccProfile *pProfile, bool bInput=true, 
-                           icRenderingIntent nIntent=icUnknownIntent, 
-                           icXformInterp nInterp=icInterpLinear, 
+  ///Note: On success the returned CIccXform owns pProfile.  bOwnsProfile selects
+  /// who frees pProfile on the FAILURE paths (when Create returns NULL): leave it
+  /// true (the default) when the caller hands its profile to Create and wants
+  /// Create to delete it on failure; pass false when the caller only lends a
+  /// profile it still owns (e.g. a profile borrowed from a live xform), so Create
+  /// leaves the borrowed profile intact instead of double-freeing it.
+  static CIccXform *Create(CIccProfile *pProfile, bool bInput=true,
+                           icRenderingIntent nIntent=icUnknownIntent,
+                           icXformInterp nInterp=icInterpLinear,
                            IIccProfileConnectionConditions *pPcc=NULL,
                            icXformLutType nLutType=icXformLutColor,
-                           bool bUseD2BTags=true, 
-                           CIccCreateXformHintManager *pHintManager=NULL);
+                           bool bUseD2BTags=true,
+                           CIccCreateXformHintManager *pHintManager=NULL,
+                           bool bOwnsProfile=true);
 
   ///Note: Provide an interface to work profile references.  The IccProfile is copied, and the copy's ownership
   ///is turned over to the Returned CIccXform object.
@@ -380,13 +406,19 @@ public:
                            bool bUseD2BTags=true, 
                            CIccCreateXformHintManager *pHintManager=NULL);
 
-  ///Note: The returned CIccXform will own the profile.
+  ///Note: On success the returned CIccXform owns pProfile.  bOwnsProfile selects
+  /// who frees pProfile on the FAILURE paths (when Create returns NULL): leave it
+  /// true (the default) when the caller hands its profile to Create and wants
+  /// Create to delete it on failure; pass false when the caller only lends a
+  /// profile it still owns (e.g. a profile borrowed from a live xform), so Create
+  /// leaves the borrowed profile intact instead of double-freeing it.
   static CIccXform *Create(CIccProfile *pProfile, CIccTag *pXformTag, bool bInput = true,
                            icRenderingIntent nIntent = icUnknownIntent,
                            icXformInterp nInterp = icInterpLinear,
                            IIccProfileConnectionConditions *pPcc = NULL,
                            bool bUseSpectralPCS = false,
-                           CIccCreateXformHintManager *pHintManager = NULL);
+                           CIccCreateXformHintManager *pHintManager = NULL,
+                           bool bOwnsProfile = true);
 
   //ShareProfile should only be called when the profile is shared between transforms 
   void ShareProfile() { m_bOwnsProfile = false; } 
@@ -1083,10 +1115,10 @@ protected:
   void pushXyzLumToXyz(IIccProfileConnectionConditions *pPCC);
   void pushScale3(icFloatNumber v1, icFloatNumber v2, icFloatNumber v3);
   void pushOffset3(icFloatNumber v1, icFloatNumber v2, icFloatNumber v3, bool bConvertIntXyzOffset=true);
-  void pushRef2Xyz(CIccProfile *pProfile, IIccProfileConnectionConditions *pPcc);
+  icStatusCMM pushRef2Xyz(CIccProfile *pProfile, IIccProfileConnectionConditions *pPcc);
   void pushSpecToRange(const icSpectralRange &srcRange, const icSpectralRange &dstRange);
-  void pushApplyIllum(CIccProfile *pProfile, IIccProfileConnectionConditions *pPcc);
-  void pushRad2Xyz(CIccProfile *pProfile, IIccProfileConnectionConditions *pPcc, bool bAbsoluteCIEColorimetry=false);
+  icStatusCMM pushApplyIllum(CIccProfile *pProfile, IIccProfileConnectionConditions *pPcc);
+  icStatusCMM pushRad2Xyz(CIccProfile *pProfile, IIccProfileConnectionConditions *pPcc, bool bAbsoluteCIEColorimetry=false);
   icStatusCMM pushBiRef2Xyz(CIccProfile *pProfile, IIccProfileConnectionConditions *pPcc);
   icStatusCMM pushBiRef2Ref(CIccProfile *pProfile, IIccProfileConnectionConditions *pPcc);
   icStatusCMM pushBiRef2Rad(CIccProfile *pProfile, IIccProfileConnectionConditions *pPcc);
@@ -1094,7 +1126,7 @@ protected:
   void pushMatrix(icUInt16Number nRows, icUInt16Number nCols, const icFloatNumber *vals);
   void pushMatrixTransverse(icUInt16Number nRows, icUInt16Number nCols, icFloatNumber *vals);
   icStatusCMM pushXYZConvert(CIccXform *pSrcXform, CIccXform *pDstXform);
-  void pushXYZNormalize(IIccProfileConnectionConditions *pPcc, const icSpectralRange &srcRange, const icSpectralRange &dstRange);
+  icStatusCMM pushXYZNormalize(IIccProfileConnectionConditions *pPcc, const icSpectralRange &srcRange, const icSpectralRange &dstRange);
 
 
   icColorSpaceSignature m_srcSpace;
@@ -1453,9 +1485,14 @@ public:
 
   virtual icXformType GetXformType() const { return icXformTypeMpe; }
 
-  ///Note: The returned CIccXform will own the profile.
-  static CIccXform *Create(CIccProfile *pProfile, bool bInput=true, icRenderingIntent nIntent=icUnknownIntent, 
-    icXformInterp nInterp=icInterpLinear, icXformLutType nLutType=icXformLutColor, CIccCreateXformHintManager *pHintManager=NULL);
+  ///Note: On success the returned CIccXform owns pProfile.  bOwnsProfile selects
+  /// who frees pProfile on the FAILURE paths (as on the other CIccXform::Create
+  /// overloads): true (default) lets Create delete a profile handed to it, false
+  /// leaves a borrowed profile intact.  (This overload currently has no callers;
+  /// the parameter keeps the Create family consistent for any future use.)
+  static CIccXform *Create(CIccProfile *pProfile, bool bInput=true, icRenderingIntent nIntent=icUnknownIntent,
+    icXformInterp nInterp=icInterpLinear, icXformLutType nLutType=icXformLutColor, CIccCreateXformHintManager *pHintManager=NULL,
+    bool bOwnsProfile=true);
 
   virtual icStatusCMM Begin();
 

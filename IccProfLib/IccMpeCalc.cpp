@@ -2822,6 +2822,7 @@ bool CIccFuncTokenizer::GetIndex(icUInt16Number &v1, icUInt16Number &v2, icUInt1
 {
   unsigned int iv1, iv2;
   const char *pos = GetPos();
+  int nParsed = 0;
 
   if (!GetNext(true))
     return false;
@@ -2831,22 +2832,29 @@ bool CIccFuncTokenizer::GetIndex(icUInt16Number &v1, icUInt16Number &v2, icUInt1
   if (*szToken=='[' || *szToken=='(') {
     if (strchr(szToken, ',')) {
       if (*szToken=='(') 
-        sscanf(m_token->c_str(), "(%u,%u)", &iv1, &iv2);
+        nParsed = sscanf(m_token->c_str(), "(%u,%u)", &iv1, &iv2);
       else 
-        sscanf(m_token->c_str(), "[%u,%u]", &iv1, &iv2);
+        nParsed = sscanf(m_token->c_str(), "[%u,%u]", &iv1, &iv2);
+      if (nParsed != 2)
+        return false;
     }
     else {
       if (*szToken=='(')
-        sscanf(m_token->c_str(), "(%u)", &iv1);
+        nParsed = sscanf(m_token->c_str(), "(%u)", &iv1);
       else 
-        sscanf(m_token->c_str(), "[%u]", &iv1);
+        nParsed = sscanf(m_token->c_str(), "[%u]", &iv1);
+      if (nParsed != 1)
+        return false;
     }
   }
   else {
     SetPos(pos); //Undo get token
   }
-  v1 = (icUInt16Number)iv1 - initV1;
-  v2 = (icUInt16Number)iv2 - initV2;
+  if (iv1 > 0xffff || iv2 > 0xffff || iv1 < initV1 || iv2 < initV2)
+    return false;
+
+  v1 = (icUInt16Number)(iv1 - initV1);
+  v2 = (icUInt16Number)(iv2 - initV2);
 
   return true;
 }
@@ -4608,9 +4616,15 @@ CIccMpeCalculator::CIccMpeCalculator(const CIccMpeCalculator &channelGen)
   if (channelGen.m_nSubElem) {
     icUInt32Number i;
 
+    // CWE-400/CWE-834: m_nSubElem is bounded by MAX_CALC_ELEMENTS on load and the
+    // m_SubElem array is allocated to match; clamp the copy loop to that bound so
+    // a corrupted count can't drive an unbounded walk.
+    const icUInt32Number MAX_CALC_ELEMENTS = 65536;
+    icUInt32Number nSub = (m_nSubElem > MAX_CALC_ELEMENTS) ? MAX_CALC_ELEMENTS : m_nSubElem;
+
     m_SubElem = (CIccMultiProcessElement**)calloc(m_nSubElem, sizeof(CIccMultiProcessElement*));
     if (m_SubElem) {
-      for (i=0; i<m_nSubElem; i++) {
+      for (i=0; i<nSub; i++) {
         if (channelGen.m_SubElem[i]) {
           m_SubElem[i] = channelGen.m_SubElem[i]->NewCopy();
           m_SubElem[i]->SetParentObject(this);
@@ -4659,9 +4673,15 @@ CIccMpeCalculator &CIccMpeCalculator::operator=(const CIccMpeCalculator &channel
   if (channelGen.m_nSubElem) {
     icUInt32Number i;
 
+    // CWE-400/CWE-834: m_nSubElem is bounded by MAX_CALC_ELEMENTS on load and the
+    // m_SubElem array is allocated to match; clamp the copy loop to that bound so
+    // a corrupted count can't drive an unbounded walk.
+    const icUInt32Number MAX_CALC_ELEMENTS = 65536;
+    icUInt32Number nSub = (m_nSubElem > MAX_CALC_ELEMENTS) ? MAX_CALC_ELEMENTS : m_nSubElem;
+
     m_SubElem = (CIccMultiProcessElement**)calloc(m_nSubElem, sizeof(CIccMultiProcessElement*));
     if (m_SubElem) {
-      for (i=0; i<m_nSubElem; i++) {
+      for (i=0; i<nSub; i++) {
         if (channelGen.m_SubElem[i]) {
           m_SubElem[i] = channelGen.m_SubElem[i]->NewCopy();
           m_SubElem[i]->SetParentObject(this);
@@ -4714,7 +4734,11 @@ void CIccMpeCalculator::SetSize(icUInt16Number nInputChannels, icUInt16Number nO
   icUInt32Number i;
 
   if (m_SubElem) {
-    for (i=0; i<m_nSubElem; i++) {
+    // CWE-400/CWE-834: m_nSubElem is bounded by MAX_CALC_ELEMENTS on load and the
+    // m_SubElem array is allocated to match; clamp the delete loop to that bound.
+    const icUInt32Number MAX_CALC_ELEMENTS = 65536;
+    icUInt32Number nSub = (m_nSubElem > MAX_CALC_ELEMENTS) ? MAX_CALC_ELEMENTS : m_nSubElem;
+    for (i=0; i<nSub; i++) {
       if (m_SubElem[i]) {
         m_SubElem[i]->SetParentObject(nullptr);
         delete m_SubElem[i];
@@ -4800,7 +4824,11 @@ void CIccMpeCalculator::Describe(std::string &sDescription, int nVerboseness)
 
     if (m_nSubElem && m_SubElem) {
       icUInt32Number i;
-      for (i=0; i<m_nSubElem; i++) {
+      // CWE-400/CWE-834: m_nSubElem is bounded by MAX_CALC_ELEMENTS on load and the
+      // m_SubElem array is allocated to match; clamp the describe walk to that bound.
+      const icUInt32Number MAX_CALC_ELEMENTS = 65536;
+      icUInt32Number nSub = (m_nSubElem > MAX_CALC_ELEMENTS) ? MAX_CALC_ELEMENTS : m_nSubElem;
+      for (i=0; i<nSub; i++) {
         snprintf(buf, bufSize, "BEGIN_SUBCALCELEM %u\n", (unsigned int) i);
         sDescription += buf;
         m_SubElem[i]->Describe(sDescription, nVerboseness);
@@ -4941,6 +4969,7 @@ bool CIccMpeCalculator::Read(icUInt32Number size, CIccIO *pIO)
 
       pIO->Seek(startPos + pos->offset, icSeekSet);
       if (!pElem->Read(pos->size, pIO)) {
+        delete pElem;
         free(posvals);
         return false;
       }
@@ -5005,10 +5034,14 @@ bool CIccMpeCalculator::Write(CIccIO *pIO)
   if (!pIO->Write16(&m_nOutputChannels))
     return false;
 
-  if (!pIO->Write32(&m_nSubElem))
+  // CWE-400/CWE-834: m_nSubElem is bounded by MAX_CALC_ELEMENTS on load; reject
+  // anything larger before serializing the count so a corrupted value can't be
+  // written or drive the unbounded sub-element write loop below.
+  const icUInt32Number MAX_CALC_ELEMENTS = 65536;
+  if (m_nSubElem >= MAX_CALC_ELEMENTS)
     return false;
 
-  if (m_nSubElem == 0xffffffffU)
+  if (!pIO->Write32(&m_nSubElem))
     return false;
 
   icUInt32Number nPos = m_nSubElem + 1;
@@ -5459,9 +5492,18 @@ CIccApplyMpeCalculator::~CIccApplyMpeCalculator()
   icUInt32Number i;
 
   if (m_SubElem) {
-    for (i=0; i<m_nSubElem; i++) {
+    // CWE-400/CWE-834: m_nSubElem is bounded by MAX_CALC_ELEMENTS in
+    // CIccMpeCalculator::Read and the m_SubElem array is allocated to match
+    // (see GetNewApply). Clamp defensively so a corrupted count can never drive
+    // an unbounded free loop over the array.
+    const icUInt32Number MAX_CALC_ELEMENTS = 65536;
+    icUInt32Number nSubElem = m_nSubElem;
+    if (nSubElem > MAX_CALC_ELEMENTS)
+      nSubElem = MAX_CALC_ELEMENTS;
+    for (i=0; i<nSubElem; i++) {
       delete m_SubElem[i];
     }
+    free(m_SubElem);
   }
 }
 

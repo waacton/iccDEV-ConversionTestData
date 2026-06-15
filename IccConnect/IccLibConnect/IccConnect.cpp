@@ -205,20 +205,23 @@ icStatusCMM CIccConnectCmm::AddXformFromConfig(CIccCmm* pCmm,
   }
 
   // Attach a CIccCreateNamedColorXformHint carrying m_nOverprint whenever
-  // the caller asked for anything other than the OverWhite default.  This
-  // covers both:
-  //  - JSON "namedOnBlack"/"namedOnGray" (which also sets m_transform =
-  //    icXformLutNamedColor)
-  //  - the legacy CLI +1000000/+2000000 high-bit (which leaves m_transform
-  //    at icXformLutColor and relies on the CMM's deviceClass-based
-  //    auto-dispatch to the named-color branch in CIccNamedColorCmm
-  //    or CIccCmm).
-  // The CMM's named-color branch fills in the header-derived color-space
-  // fields after the profile is opened (via the Layer 2 changes that honor
-  // a pre-attached hint).  When the profile turns out not to be a
-  // NamedColor xform, the hint is simply unused.
+  // the caller asked for anything other than the OverWhite default, or
+  // whenever the JSON explicitly selected one of the named-color transform
+  // variants (so the named-color factory path in CIccXform::Create gets a
+  // pre-built hint regardless of profile device class).  Covers:
+  //  - JSON "named*OnBlack"/"named*OnGray" (m_nOverprint != OverWhite)
+  //  - JSON "named", "namedColorimetric", "namedSpectral" (the m_transform
+  //    check below; m_nOverprint is OverWhite)
+  //  - the legacy CLI +1000000/+2000000 high-bit (leaves m_transform at
+  //    icXformLutColor and relies on the CMM's deviceClass-based
+  //    auto-dispatch into the named-color branch).
+  // When the profile turns out not to be a NamedColor xform the hint is
+  // simply unused.
   if (pCfg->m_nOverprint != icNamedColorOverWhite ||
-      pCfg->m_transform == icXformLutNamedColor) {
+      pCfg->m_transform == icXformLutNamedColor ||
+      pCfg->m_transform == icXformLutNamedColorimetric ||
+      pCfg->m_transform == icXformLutNamedSpectral ||
+      pCfg->m_transform == icXformLutNamedDevice) {
     CIccCreateNamedColorXformHint* pNCHint =
         new (std::nothrow) CIccCreateNamedColorXformHint();
     if (!pNCHint) {
@@ -247,8 +250,16 @@ icStatusCMM CIccConnectCmm::AddXformFromConfig(CIccCmm* pCmm,
     sErrorMsg = "unable to open ICC profile '" + pCfg->m_iccFile + "'";
   }
   else if (stat != icCmmStatOk) {
+    // AddXform rejects a profile for chain-level reasons as well as
+    // profile-level ones (e.g. icCmmStatBadSpaceLink (2) means the profile's
+    // connecting color space does not match the output space of the previous
+    // stage - or, for the first stage, the color space of the source data).
+    // A bare numeric status forced users to look up the icStatusCMM enum to
+    // triage failures (issue #1323), so decode it with
+    // CIccCmm::GetStatusText alongside the number.
     std::ostringstream oss;
-    oss << "AddXform failed for '" << pCfg->m_iccFile << "' (status " << (int)stat << ")";
+    oss << "AddXform failed for '" << pCfg->m_iccFile << "' (status " << (int)stat
+        << ": " << CIccCmm::GetStatusText(stat) << ")";
     sErrorMsg = oss.str();
   }
   return stat;
@@ -292,8 +303,12 @@ CIccConnectCmm* CIccConnectCmm::CreateNamed(const CIccCfgProfileSequence& profil
 
   icStatusCMM beginStat = pCmm->Begin();
   if (beginStat != icCmmStatOk) {
+    // Decode the status (issue #1323) - Begin() is where the named-color CMM
+    // finalizes connections between the queued xforms, so failures here are
+    // chain-compatibility problems rather than per-profile ones.
     std::ostringstream oss;
-    oss << "Begin() failed (status " << (int)beginStat << "); profile chain is incompatible";
+    oss << "Begin() failed (status " << (int)beginStat << ": "
+        << CIccCmm::GetStatusText(beginStat) << "); profile chain is incompatible";
     sErrorMsg = oss.str();
     ReleasePccList(pccList);
     return nullptr;
@@ -391,8 +406,11 @@ CIccConnectCmm* CIccConnectCmm::CreateStandard(const CIccCfgProfileSequence& pro
         pCfg->m_useV5SubProfile
       );
       if (stat != icCmmStatOk) {
+        // Same status decoding as AddXformFromConfig (issue #1323): report
+        // the icStatusCMM name, not just the raw number.
         std::ostringstream oss;
-        oss << "AddXform failed for embedded source profile (status " << (int)stat << ")";
+        oss << "AddXform failed for embedded source profile (status " << (int)stat
+            << ": " << CIccCmm::GetStatusText(stat) << ")";
         sStageErr = oss.str();
       }
     }
@@ -415,7 +433,10 @@ CIccConnectCmm* CIccConnectCmm::CreateStandard(const CIccCfgProfileSequence& pro
   icStatusCMM beginStat = pCmm->Begin();
   if (beginStat != icCmmStatOk) {
     std::ostringstream oss;
-    oss << "Begin() failed (status " << (int)beginStat
+    // Decode the status name (issue #1323) in addition to the raw number and
+    // the source/destination spaces already reported below.
+    oss << "Begin() failed (status " << std::dec << (int)beginStat << ": "
+        << CIccCmm::GetStatusText(beginStat)
         << "); profile chain is incompatible (srcSpace=0x"
         << std::hex << (unsigned)pCmm->GetSourceSpace()
         << " dstSpace=0x" << (unsigned)pCmm->GetDestSpace() << ")";
@@ -497,8 +518,11 @@ CIccConnectCmm* CIccConnectCmm::CreateSearch(const CIccCfgSearchApply& searchApp
       sStageErr = "unable to open ICC profile '" + pCfg->m_iccFile + "'";
     }
     else if (stat != icCmmStatOk) {
+      // Same status decoding as AddXformFromConfig (issue #1323): report
+      // the icStatusCMM name, not just the raw number.
       std::ostringstream oss;
-      oss << "AddXform failed for '" << pCfg->m_iccFile << "' (status " << (int)stat << ")";
+      oss << "AddXform failed for '" << pCfg->m_iccFile << "' (status " << (int)stat
+          << ": " << CIccCmm::GetStatusText(stat) << ")";
       sStageErr = oss.str();
     }
 
@@ -588,7 +612,9 @@ CIccConnectCmm* CIccConnectCmm::CreateSearch(const CIccCfgSearchApply& searchApp
   icStatusCMM beginStat = pCmm->Begin();
   if (beginStat != icCmmStatOk) {
     std::ostringstream oss;
-    oss << "Begin() failed (status " << (int)beginStat
+    // Decode the status name (issue #1323) in addition to the raw number.
+    oss << "Begin() failed (status " << (int)beginStat << ": "
+        << CIccCmm::GetStatusText(beginStat)
         << "); search-profile chain is incompatible";
     sErrorMsg = oss.str();
     ReleasePccList(pccList);

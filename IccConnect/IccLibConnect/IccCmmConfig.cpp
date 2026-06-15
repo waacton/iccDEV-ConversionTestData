@@ -66,6 +66,9 @@
 
 
 #include "IccCmmConfig.h"
+
+#include <errno.h>
+#include <limits.h>
 #include <cstdio>
 #include <fstream>
 #include <cstring>
@@ -93,9 +96,18 @@ static FILE* icOpenWriteTextFile(const char* filename)
 #if defined(_WIN32)
   return fopen(filename, "wt");
 #else
+  struct stat st;
+  if (stat(filename, &st) == 0 && !S_ISREG(st.st_mode))
+    return nullptr;
+
   int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
   if (fd < 0)
     return nullptr;
+
+  if (fstat(fd, &st) != 0 || !S_ISREG(st.st_mode)) {
+    close(fd);
+    return nullptr;
+  }
 
   FILE* f = fdopen(fd, "w");
   if (!f)
@@ -103,6 +115,22 @@ static FILE* icOpenWriteTextFile(const char* filename)
 
   return f;
 #endif
+}
+
+static bool icCloseWriteTextFile(FILE* f)
+{
+  if (!f)
+    return false;
+
+  bool failed = (fflush(f) != 0) || (ferror(f) != 0);
+
+  if (f == stdout)
+    return !failed;
+
+  if (fclose(f) != 0)
+    failed = true;
+
+  return !failed;
 }
 
 static bool icFormatFloatValue(char* buf, size_t bufSize, int nDigits, int nPrecision, icFloatNumber v)
@@ -150,6 +178,36 @@ static const char* clrEncNames[] = { "value", "float", "unitFloat", "percent",
                                      "8Bit", "16Bit", "16BitV2", nullptr };
 static icFloatColorEncoding clrEncValues[] = { icEncodeValue, icEncodeFloat, icEncodeUnitFloat, icEncodePercent,
                                                icEncode8Bit, icEncode16Bit, icEncode16BitV2, icEncodeUnknown };
+
+static bool icIsJsonColorEncoding(icFloatColorEncoding v)
+{
+  int i;
+  for (i = 0; clrEncNames[i]; i++) {
+    if (v == clrEncValues[i])
+      return true;
+  }
+
+  return false;
+}
+
+static bool icParseIntArg(const char* arg, int& n)
+{
+  char* end = NULL;
+  long value;
+
+  if (!arg || !*arg)
+    return false;
+
+  errno = 0;
+  value = strtol(arg, &end, 10);
+  if (errno || end == arg || value < INT_MIN || value > INT_MAX)
+    return false;
+  if (*end && *end != ':')
+    return false;
+
+  n = (int)value;
+  return true;
+}
 
 icFloatColorEncoding icSetJsonColorEncoding(const char* szEncode)
 {
@@ -279,7 +337,14 @@ int CIccCfgDataApply::fromArgs(const char** args, int nArg, bool bReset)
   m_dstFile.clear();
 
   //Setup destination encoding
-  m_dstEncoding = (icFloatColorEncoding)atoi(args[1]);
+  int nDstEncoding;
+  if (!icParseIntArg(args[1], nDstEncoding))
+    return 0;
+
+  icFloatColorEncoding dstEncoding = (icFloatColorEncoding)nDstEncoding;
+  if (!icIsJsonColorEncoding(dstEncoding))
+    return 0;
+  m_dstEncoding = dstEncoding;
 
   const char *colon = strchr(args[1], ':');
   if (colon) {
@@ -451,9 +516,12 @@ bool CIccCfgImageApply::fromJson(json j, bool bReset)
   if (jsonToValue(j["dstEncoding"], str))
     m_dstEncoding = icSetJsonFileEncoding(str.c_str());
 
-  jsonToValue(j["dstCompression"], m_dstCompression);
-  jsonToValue(j["dstPlanar"], m_dstPlanar);
-  jsonToValue(j["dstEmbedIcc"], m_dstEmbedIcc);
+  if (j.contains("dstCompression") && !jsonToValue(j["dstCompression"], m_dstCompression))
+    return false;
+  if (j.contains("dstPlanar") && !jsonToValue(j["dstPlanar"], m_dstPlanar))
+    return false;
+  if (j.contains("dstEmbedIcc") && !jsonToValue(j["dstEmbedIcc"], m_dstEmbedIcc))
+    return false;
 
   return true;
 }
@@ -661,10 +729,15 @@ static bool icGetJsonRenderingIntent(const json& j, int& v)
     else if (str == icIntentNames[icAbsolute])
       v = icAbsolute;
     else
-      v = icUnknownIntent;
+      return false;
   }
-  else if (j.is_number_integer()) {
-    v = j.get<int>();
+  else if (j.is_number()) {
+    int nIntent = icUnknownIntent;
+    if (!jsonToValue(j, nIntent) ||
+        nIntent < static_cast<int>(icPerceptual) ||
+        nIntent > static_cast<int>(icAbsolute))
+      return false;
+    v = nIntent;
   }
   else
     return false;
@@ -681,23 +754,48 @@ static const char* icGetRenderingIntentName(int nIntent)
 }
 
 // Transform names exposed by JSON and the (transform, overprint) pair they
-// resolve to.  The "namedOnBlack" / "namedOnGray" variants pick alternate
-// spectral array members on a v5 NamedColor profile; the overprint value is
-// ignored for non-named transforms.  Keep all three arrays in lock-step.
+// resolve to.  The named-color variants come on two axes that mirror the
+// non-named color/colorimetric/spectral triad:
+//
+//  - PCS-side stem:
+//    - "named"             -- auto/legacy: heuristic picks colorimetric or
+//                              spectral based on useD2BxB2Dx and whether
+//                              the profile declares spectralPCS.
+//    - "namedColorimetric" -- pin to nmclPcsDataMbr; fail clean if absent.
+//    - "namedSpectral"     -- pin to the overprint-correct spectral
+//                              member; fail clean if absent.
+//    - "namedDevice"       -- pin to nmclDeviceDataMbr (xform dst is the
+//                              profile's colorSpace); fail clean if absent.
+//
+//  - Overprint suffix (spectral path only -- a no-op on the other stems,
+//    since neither nmclPcsDataMbr nor nmclDeviceDataMbr varies by
+//    substrate): "" / "OnBlack" / "OnGray" selects 'spec' / 'spcb' /
+//    'spcg' from the spectral array.
+//
+// Keep all three arrays in lock-step.
 static const char* icTranNames[] = { "default",
                                      "named", "namedOnBlack", "namedOnGray",
+                                     "namedColorimetric", "namedColorimetricOnBlack", "namedColorimetricOnGray",
+                                     "namedSpectral", "namedSpectralOnBlack", "namedSpectralOnGray",
+                                     "namedDevice",
                                      "colorimetric", "spectral",
                                      "MCS", "preview", "gamut", "brdfParam",
                                      "brdfDirect", "brdfMcsParam" , nullptr };
 
 static icXformLutType icTranValues[] = { icXformLutColor,
                                          icXformLutNamedColor, icXformLutNamedColor, icXformLutNamedColor,
+                                         icXformLutNamedColorimetric, icXformLutNamedColorimetric, icXformLutNamedColorimetric,
+                                         icXformLutNamedSpectral, icXformLutNamedSpectral, icXformLutNamedSpectral,
+                                         icXformLutNamedDevice,
                                          icXformLutColorimetric, icXformLutSpectral,
                                          icXformLutMCS, icXformLutPreview, icXformLutGamut, icXformLutBRDFParam,
                                          icXformLutBRDFDirect, icXformLutBRDFMcsParam, icXformLutColor };
 
 static icNamedColorOverprintType icTranOverprint[] = { icNamedColorOverWhite,
                                                        icNamedColorOverWhite, icNamedColorOverBlack, icNamedColorOverGray,
+                                                       icNamedColorOverWhite, icNamedColorOverBlack, icNamedColorOverGray,
+                                                       icNamedColorOverWhite, icNamedColorOverBlack, icNamedColorOverGray,
+                                                       icNamedColorOverWhite,
                                                        icNamedColorOverWhite, icNamedColorOverWhite,
                                                        icNamedColorOverWhite, icNamedColorOverWhite, icNamedColorOverWhite, icNamedColorOverWhite,
                                                        icNamedColorOverWhite, icNamedColorOverWhite, icNamedColorOverWhite };
@@ -765,7 +863,8 @@ bool CIccCfgProfile::fromJson(json j, bool bReset)
 
   jsonToValue(j["iccFile"], parsed.m_iccFile);
 
-  icGetJsonRenderingIntent(j["intent"], parsed.m_intent);
+  if (j.contains("intent") && !icGetJsonRenderingIntent(j["intent"], parsed.m_intent))
+    return false;
 
   std::string str;
   if (jsonToValue(j["transform"], str)) {
@@ -1319,9 +1418,12 @@ bool CIccCfgSearchApply::fromJsonInit(json j)
 
   m_bInitialized = true;
 
-  int intent = icUnknownIntent; // just incase json parsing fails
-  icGetJsonRenderingIntent(j["intent"], intent);
-  m_intentInitial = (icRenderingIntent)intent;
+  if (j.contains("intent")) {
+    int intent = icUnknownIntent;
+    if (!icGetJsonRenderingIntent(j["intent"], intent))
+      return false;
+    m_intentInitial = (icRenderingIntent)intent;
+  }
 
   std::string str;
   if (jsonToValue(j["transform"], str)) {
@@ -2043,7 +2145,14 @@ fprintf(f, "\n");
 
     if (pData->m_srcName.size() != size_t(0)) {
       fprintf(f,"{ \"%s\" }", pData->m_srcName.c_str());
-      if (pData->m_srcValues.size() > 0 && pData->m_srcValues[0] != 1.0) {
+      // Echo the tint the caller supplied (m_srcValues[0]).  We used to
+      // suppress this when the tint was exactly 1.0, but that hid a
+      // value the caller had explicitly written -- the
+      // hpwos-S5/S6/S7 configs were a concrete example where the
+      // colorData "v" entry of 1.0 disappeared from the dump.  Emit
+      // unconditionally when m_srcValues is populated; an absent "v"
+      // still leaves m_srcValues empty and produces no token.
+      if (pData->m_srcValues.size() > 0) {
         if (!writeFloat(pData->m_srcValues[0])) { if (f != stdout) fclose(f); return false; }
       }
     }
@@ -2055,8 +2164,8 @@ fprintf(f, "\n");
     fprintf(f, "\n");
   }
 
-  if (f != stdout)
-    fclose(f);
+  if (!icCloseWriteTextFile(f))
+    return false;
 
   return true;
 }
@@ -2316,8 +2425,8 @@ bool CIccCfgColorData::toIt8(const char* filename, icUInt8Number nDigits, icUInt
   }
   fprintf(f, "END_DATA\n");
 
-  if (f != stdout)
-    fclose(f);
+  if (!icCloseWriteTextFile(f))
+    return false;
 
   return true;
 }

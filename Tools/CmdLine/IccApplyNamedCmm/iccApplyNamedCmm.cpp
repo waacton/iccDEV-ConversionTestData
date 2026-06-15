@@ -77,6 +77,7 @@
 #include "IccMpeCalc.h"
 #include "IccProfLibVer.h"
 #include "IccConnect.h"
+#include "../IccCmdLineUtil.h"
 #if !defined(_WIN32)
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -90,22 +91,7 @@
 static
 FILE* icOpenWriteTextFile(const char* szFname)
 {
-  if (!szFname || !szFname[0])
-    return stdout;
-
-#if defined(_WIN32)
-  return fopen(szFname, "wt");
-#else
-  int fd = open(szFname, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-  if (fd < 0)
-    return nullptr;
-
-  FILE* f = fdopen(fd, "wt");
-  if (!f)
-    close(fd);
-
-  return f;
-#endif
+  return icOpenRegularWriteTextFile(szFname);
 }
 
 // ============================================================================
@@ -386,11 +372,17 @@ int main(int argc, const char* argv[])
         size_t n = fwrite(jsonText.c_str(), 1, jsonText.size(), f);
         if (n != jsonText.size()) {
           printf("Error writing json config file '%s'\n", exportFile.c_str());
+          fclose(f);
+          return EXIT_FAILURE;
         }
-        (void)fclose(f);
+        if (!icFlushAndClose(f)) {
+          printf("Error closing json config file '%s'\n", exportFile.c_str());
+          return EXIT_FAILURE;
+        }
       }
       else {
         printf("Unable to export config file '%s'\n", exportFile.c_str());
+        return EXIT_FAILURE;
       }
     }
   }
@@ -501,11 +493,19 @@ int main(int argc, const char* argv[])
 
       const char* szName = pData->m_name.c_str();
       icFloatNumber tint;
-      
+
       if (pData->m_values.size())
         tint = pData->m_values[0];
       else
         tint = 1.0;
+
+      // For named-color input the tint lives in pData->m_values (the
+      // JSON "v" field), not pData->m_srcValues; mirror the pixel-input
+      // branch below so the dump can echo the tint the caller supplied.
+      // When the caller omitted "v" entirely we leave m_srcValues empty
+      // rather than synthesise a 1.0 the caller did not write.
+      if (pData->m_values.size())
+        out->m_srcValues = pData->m_values;
 
       switch(pNamedCmm->GetInterface()) {
         case icApplyNamed2Pixel:

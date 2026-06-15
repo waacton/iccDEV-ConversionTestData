@@ -82,6 +82,7 @@
 #include "IccTagLut.h"
 #include "IccTagMPE.h"
 #include "IccMpeBasic.h"
+#include "../IccCmdLineUtil.h"
 #if !defined(_WIN32)
 #include <fcntl.h>
 #include <sys/stat.h>
@@ -94,22 +95,7 @@
 static
 FILE* icOpenWriteBinaryFile(const char* szFname)
 {
-  if (!szFname || !szFname[0])
-    return stdout;
-
-#if defined(_WIN32)
-  return fopen(szFname, "wb");
-#else
-  int fd = open(szFname, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-  if (fd < 0)
-    return nullptr;
-
-  FILE* f = fdopen(fd, "wb");
-  if (!f)
-    close(fd);
-
-  return f;
-#endif
+  return icOpenRegularWriteBinaryFile(szFname);
 }
 
 // ============================================================================
@@ -674,6 +660,18 @@ void Usage()
 
 //===================================================
 
+// The tool owns every -PCC profile it opens until cmm.Begin() has consumed the
+// connection conditions; they are tracked in pccList and must be released on
+// every exit path.  Centralizing the release here keeps the early-return error
+// paths from stranding them (#1336).
+static void releasePccList(IccProfilePtrList& pccList)
+{
+  for (IccProfilePtrList::iterator pcc = pccList.begin(); pcc != pccList.end(); pcc++) {
+    delete *pcc;
+  }
+  pccList.clear();
+}
+
 int main(int argc, icChar* argv[])
 {
   int minargs = 10; // minimum number of arguments
@@ -796,6 +794,8 @@ int main(int argc, icChar* argv[])
         pPccProfile = OpenIccProfile(argv[nCount+3]);
         if (!pPccProfile) {
           printf("Unable to open Profile Connections Conditions from '%s'\n", argv[nCount+3]);
+          // Free any -PCC profiles opened on earlier loop iterations (#1336).
+          releasePccList(pccList);
           return -1;
         }
         //Keep track of pPccProfile for until after cmm.Begin is called
@@ -813,7 +813,25 @@ int main(int argc, icChar* argv[])
       stat = theCmm.AddXform(pXformProfile, nIntent<0 ? icUnknownIntent : (icRenderingIntent)nIntent, nInterp, pPccProfile,
                               (icXformLutType)nType, bUseD2BxB2DxTags, &Hint);
       if (stat) {
-        printf("Invalid Profile(%d):  %s\n", stat, argv[nCount]);
+        // AddXform can fail for reasons that have nothing to do with the
+        // profile itself.  In particular icCmmStatBadSpaceLink (2) means the
+        // profile's source color space does not connect to the output space
+        // of the previous transform in the chain (CIccCmm alternates the
+        // input/output direction of successive profiles based on the
+        // first_transform argument, so the connecting spaces depend on chain
+        // position and direction, not just the profile).  The old message
+        // here ("Invalid Profile(N)") reported any failure as an invalid
+        // profile, which misled users when a structurally valid profile was
+        // simply chained incompatibly - see issue #1322.  Decode the status
+        // with CIccCmm::GetStatusText so the real cause is visible.
+        printf("Error - Unable to add '%s' to transform chain (status %d: %s)\n", argv[nCount], stat, CIccCmm::GetStatusText(stat));
+        if (stat == icCmmStatBadSpaceLink) {
+          printf("The profile's color spaces do not connect with the previous transform in the chain.\n");
+        }
+        // AddXform already owns/frees pXformProfile on failure (#1327); the
+        // tool still owns the accumulated -PCC profiles, so release them before
+        // bailing out instead of leaking them (#1336).
+        releasePccList(pccList);
         return -1;
       }
       sigMap.clear();
@@ -823,19 +841,23 @@ int main(int argc, icChar* argv[])
 
   //All profiles have been added to CMM.  Tell CMM that we are ready to begin applying colors/pixels
   if((stat=theCmm.Begin())) {
-    printf("Error %d - Unable to begin profile application - Possibly invalid or incompatible profiles\n", stat);
+    // Begin() walks the assembled xform list and connects/optimizes the
+    // transforms; it is where cross-profile incompatibilities that AddXform
+    // could not see (PCS conversion setup, connection conditions) surface.
+    // Decode the status code into text (issue #1322 follow-through) instead
+    // of printing a bare number.
+    printf("Error - Unable to begin profile application (status %d: %s) - Possibly invalid or incompatible profiles\n", stat, CIccCmm::GetStatusText(stat));
+    // Begin() failed after the chain was assembled; the -PCC profiles are still
+    // tool-owned at this point, so release them rather than leak them (#1336).
+    releasePccList(pccList);
     return -1;
   }
 
   pWriter->setCmm(&theCmm);
 
-  //Now we can release the pccProfile nodes.
-  IccProfilePtrList::iterator pcc;
-  for (pcc=pccList.begin(); pcc!=pccList.end(); pcc++) {
-    CIccProfile *pPccProfile = *pcc;
-    delete pPccProfile;
-  }
-  pccList.clear();
+  //Now that Begin() has consumed the connection conditions we can release the
+  //-PCC profile nodes.
+  releasePccList(pccList);
 
   if (!pWriter->begin(theCmm.GetSourceSpace(), theCmm.GetDestSpace())) {
     printf("Unable to begin writing LUT\n");

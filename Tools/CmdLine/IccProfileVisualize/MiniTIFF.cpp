@@ -67,34 +67,21 @@
 #include <cmath>
 #include <memory>
 #include <limits>
+#include "../IccCmdLineUtil.h"
 #if !defined(_WIN32)
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
 #include "MiniTIFF.hpp"
+#include "errorLog.hpp"
 
 /******************************************************************************/
 
 static
 FILE* icOpenWriteBinaryFile(const char* szFname)
 {
-  if (!szFname || !szFname[0])
-    return stdout;
-
-#if defined(_WIN32)
-  return fopen(szFname, "wb");
-#else
-  int fd = open(szFname, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
-  if (fd < 0)
-    return nullptr;
-
-  FILE* f = fdopen(fd, "wb");
-  if (!f)
-    close(fd);
-
-  return f;
-#endif
+  return icOpenRegularWriteBinaryFile(szFname);
 }
 
 /******************************************************************************/
@@ -229,7 +216,7 @@ bool WriteTIFF( const std::string &name, float dpi, int color_model, uint8_t *bu
   // see if we can create or update this filename
   outfile = icOpenWriteBinaryFile(name.c_str());
   if(outfile==NULL) {
-    fprintf(stderr,"Could not create output file %s\n", name.c_str());
+    LogAnError(stderr,"Could not create output file %s\n", name.c_str());
     return false;
   }
 
@@ -248,7 +235,7 @@ bool WriteTIFF( const std::string &name, float dpi, int color_model, uint8_t *bu
 
   // check for early failure
   if (writeFailed || ferror(outfile)) {
-    fprintf(stderr, "ERROR: I/O error writing TIFF header to %s\n", name.c_str() );
+    LogAnError(stderr, "ERROR: I/O error writing TIFF header to %s\n", name.c_str() );
     fclose(outfile);
     return false;
   }
@@ -315,7 +302,7 @@ bool WriteTIFF( const std::string &name, float dpi, int color_model, uint8_t *bu
 
   long byteCountOffset = ftell( outfile );
   if (byteCountOffset < 0) {
-    fprintf(stderr, "ERROR: TIFF ftell failed\n");
+    LogAnError(stderr, "ERROR: TIFF ftell failed\n");
     (void)fclose(outfile);
     return false;
   }
@@ -377,7 +364,7 @@ bool WriteTIFF( const std::string &name, float dpi, int color_model, uint8_t *bu
   
   // check again after writing the tag directory
   if (writeFailed || ferror(outfile)) {
-    fprintf(stderr, "ERROR: I/O error writing TIFF directory to %s\n", name.c_str() );
+    LogAnError(stderr, "ERROR: I/O error writing TIFF directory to %s\n", name.c_str() );
     fclose(outfile);
     return false;
   }
@@ -404,21 +391,21 @@ bool WriteTIFF( const std::string &name, float dpi, int color_model, uint8_t *bu
 
     long stripStart = ftell( outfile );
     if (stripStart < 0 || (unsigned long)stripStart > UINT32_MAX) {
-      fprintf(stderr, "ERROR: TIFF strip offset exceeds 32-bit range\n");
+      LogAnError(stderr, "ERROR: TIFF strip offset exceeds 32-bit range\n");
       fclose(outfile);
       return false;
     }
 
     size_t pixelBytes = (size_t)width * (size_t)channels * (size_t)(depth/8);
     if (fwrite( buffer + offset, pixelBytes, rowCount, outfile ) != rowCount) {
-      fprintf(stderr, "ERROR: TIFF failed to write pixel data\n");
+      LogAnError(stderr, "ERROR: TIFF failed to write pixel data\n");
       fclose(outfile);
       return false;
     }
 
     long stripEnd = ftell( outfile );
     if (stripEnd < 0 || (unsigned long)stripEnd > UINT32_MAX) {
-      fprintf(stderr, "ERROR: TIFF strip end offset exceeds 32-bit range\n");
+      LogAnError(stderr, "ERROR: TIFF strip end offset exceeds 32-bit range\n");
       fclose(outfile);
       return false;
     }
@@ -444,14 +431,14 @@ bool WriteTIFF( const std::string &name, float dpi, int color_model, uint8_t *bu
   }
 
   if (writeFailed || ferror(outfile)) {
-    fprintf(stderr, "ERROR: I/O error writing TIFF data to %s\n", name.c_str() );
+    LogAnError(stderr, "ERROR: I/O error writing TIFF data to %s\n", name.c_str() );
     fclose(outfile);
     return false;
   }
 
-  // and close the file
-  if (fclose(outfile) != 0) {
-    fprintf(stderr, "WARNING: fclose failed for %s\n", name.c_str() );
+  if (!icFlushAndClose(outfile)) {
+    LogAnError(stderr, "ERROR: fclose failed for %s\n", name.c_str() );
+    return false;
   }
 
   return true;

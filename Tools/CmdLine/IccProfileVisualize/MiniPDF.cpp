@@ -64,10 +64,13 @@
 #include <cstdlib>
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 #include <cmath>
 #include "MiniPDF.hpp"
+#include "../IccCmdLineUtil.h"
+#include "errorLog.hpp"
 
 
 /******************************************************************************/
@@ -76,6 +79,22 @@ std::ostream& operator<<( std::ostream &os, const Rect2D &r )
 {
   // llx lly urx ury
   return os << r.left << " " << r.bottom << " " << r.right << " " << r.top;
+}
+
+static bool WritePdfTextFile(FILE* outFile, const std::string& text)
+{
+  bool failed = false;
+
+  if (!outFile)
+    return false;
+
+  if (!text.empty() && fwrite(text.data(), 1, text.size(), outFile) != text.size())
+    failed = true;
+
+  if (!icFlushAndClose(outFile))
+    failed = true;
+
+  return !failed;
 }
 
 /******************************************************************************/
@@ -91,7 +110,7 @@ std::ostream& operator<<( std::ostream &os, const point2D &p )
 void PDFWriter::OpenFile( const std::string &filename, float widthPt, float heightPt )
 {
   if (!m_filename.empty()) {
-    fprintf(stderr,"WARNING - PDF file already open!\n");
+    LogAnError(stderr,"WARNING - PDF file already open!\n");
   }
 
   m_filename = filename;
@@ -144,30 +163,40 @@ void PDFWriter::OpenFile( const std::string &filename, float widthPt, float heig
 
 /******************************************************************************/
 
-void PDFWriter::CloseFile() {
-
+void PDFWriter::CloseFile()
+{
   if (!m_filename.empty()) {
     if (PageCount() > 0) {
         try  {
-          std::ofstream out(m_filename);
+          std::ostringstream out;
+          out.exceptions(std::ios::badbit | std::ios::failbit);
           WriteHeader(out);
           WriteObjects(out);
           WriteXRefs(out);
           WriteFooter(out);
-          out.close();
-          m_objects.clear();
+
+          // PDF export paths are intentional caller-selected output files after regular-file validation.
+
+          // codeql[cpp/path-injection]
+          FILE* outFile = icOpenRegularWriteTextFile(m_filename.c_str());
+          if (!WritePdfTextFile(outFile, out.str())) {
+            LogAnError(stderr, "PDF writing error in '%s': unable to open regular output file\n", m_filename.c_str());
+            m_filename.clear();
+            return;
+          }
+
         }
         catch (const std::exception& e) {
-          fprintf(stderr, "PDF writing error in '%s': '%s'\n", m_filename.c_str(), e.what() );
+          LogAnError(stderr, "PDF writing error in '%s': '%s'\n", m_filename.c_str(), e.what() );
         }
         catch (...) {
-          fprintf(stderr, "PDF writing error in '%s': unknown exception\n", m_filename.c_str());
+          LogAnError(stderr, "PDF writing error in '%s': unknown exception\n", m_filename.c_str());
         }
     }
     m_filename.clear();
   }
 
-  // cleanup all the allocated objects
+  // always cleanup all of the allocated objects
   for (auto &obj: m_objects ) {
     delete obj;
     obj = NULL;
@@ -213,8 +242,8 @@ void PDFWriter::WriteXRefs( std::ostream &out ) {
 
   for( auto &obj : m_objects ) {
     if (obj->m_offset == 0)
-        fprintf(stderr,"WARNING - PDF object referenced but not written yet\n");
-    snprintf( buf, bufSize, "%10.10zu", obj->m_offset );
+        LogAnError(stderr,"WARNING - PDF object referenced but not written yet\n");
+    snprintf( buf, bufSize, "%10.10zu", obj->m_offset );    // must be precisely formatted
     out << buf << " 00000 n \n";  // 20 bytes each, exactly
   }
   out << "\n\n";
@@ -227,7 +256,7 @@ void PDFWriter::WriteFooter( std::ostream &out ) {
   out << "<< /Size " << (m_objects.size()+1) << " /Root 1 0 R>>\n";
   out << "startxref\n";
   if (m_xrefStart == 0)
-    fprintf(stderr,"WARNING - PDF trailer written before xref directory\n");
+    LogAnError(stderr,"WARNING - PDF trailer written before xref directory\n");
   out << m_xrefStart;
   out << "\n%%EOF\n";
 }

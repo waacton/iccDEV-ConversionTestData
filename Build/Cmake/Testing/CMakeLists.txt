@@ -36,6 +36,16 @@ add_custom_target(check
   VERBATIM
 )
 
+add_custom_target(build-test-binaries
+  COMMENT "Build iccDEV CTest regression helper binaries"
+)
+add_dependencies(check build-test-binaries)
+
+function(iccdev_add_regression_executable TARGET_NAME)
+  add_executable("${TARGET_NAME}" EXCLUDE_FROM_ALL ${ARGN})
+  add_dependencies(build-test-binaries "${TARGET_NAME}")
+endfunction()
+
 function(iccdev_add_check_dependencies)
   foreach(_target
       iccApplyNamedCmm
@@ -65,13 +75,16 @@ function(iccdev_add_check_dependencies)
 endfunction()
 
 iccdev_add_check_dependencies()
+if(TARGET iccDescribeSinkTest)
+  add_dependencies(build-test-binaries iccDescribeSinkTest)
+endif()
 
 function(iccdev_add_iccconnect_thread_test)
   if(NOT TARGET "${TARGET_LIB_ICCCONNECT}")
     return()
   endif()
 
-  add_executable(iccConnectThreadTest
+  iccdev_add_regression_executable(iccConnectThreadTest
     "${ICCDEV_REPO_ROOT}/.github/ci/regression/iccconnect-threaded-cmm.cpp"
   )
   target_compile_features(iccConnectThreadTest PRIVATE cxx_std_17)
@@ -122,7 +135,7 @@ function(iccdev_add_embedio_read8_bounds_test)
     return()
   endif()
 
-  add_executable(iccEmbedIoRead8BoundsTest
+  iccdev_add_regression_executable(iccEmbedIoRead8BoundsTest
     "${ICCDEV_REPO_ROOT}/.github/ci/regression/embedio-read8-bounds.cpp"
   )
   target_link_libraries(iccEmbedIoRead8BoundsTest PRIVATE ${TARGET_LIB_ICCPROFLIB})
@@ -152,12 +165,152 @@ function(iccdev_add_embedio_read8_bounds_test)
   endif()
 endfunction()
 
+function(iccdev_add_tag_layout_shared_data_test)
+  if(NOT TARGET "${TARGET_LIB_ICCPROFLIB}")
+    return()
+  endif()
+
+  iccdev_add_regression_executable(iccTagLayoutSharedDataTest
+    "${ICCDEV_REPO_ROOT}/.github/ci/regression/tag-layout-shared-data.cpp"
+  )
+  target_link_libraries(iccTagLayoutSharedDataTest PRIVATE ${TARGET_LIB_ICCPROFLIB})
+  add_dependencies(check iccTagLayoutSharedDataTest)
+
+  add_test(
+    NAME iccdev.tag-layout-shared-data
+    COMMAND "$<TARGET_FILE:iccTagLayoutSharedDataTest>"
+  )
+  set_tests_properties(iccdev.tag-layout-shared-data PROPERTIES
+    WORKING_DIRECTORY "${ICCDEV_REPO_ROOT}"
+    TIMEOUT 60
+    LABELS "iccdev;validation;layout;regression"
+  )
+  if(WIN32)
+    set(_tag_layout_windows_env_mods
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:iccTagLayoutSharedDataTest>"
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:${TARGET_LIB_ICCPROFLIB}>"
+    )
+    foreach(_runtime_path IN LISTS ICCDEV_WINDOWS_RUNTIME_PATHS)
+      list(APPEND _tag_layout_windows_env_mods
+        "PATH=path_list_prepend:${_runtime_path}")
+    endforeach()
+    set_tests_properties(iccdev.tag-layout-shared-data PROPERTIES
+      ENVIRONMENT_MODIFICATION "${_tag_layout_windows_env_mods}"
+    )
+  endif()
+endfunction()
+
+# Guards CIccCmmSearch::AddXform profile ownership (#1332): the search CMM
+# rejects a NamedColor profile (no search LUT) and, like the base AddXform
+# contract (#1327), must free it.  The helper feeds a NamedColor profile through
+# the inherited filename overload, which opens it internally, so a profile the
+# override fails to free is unreachable and reported by the ASan/LSan CI job.
+function(iccdev_add_cmmsearch_namedcolor_ownership_test)
+  if(NOT TARGET "${TARGET_LIB_ICCPROFLIB}")
+    return()
+  endif()
+
+  iccdev_add_regression_executable(iccCmmSearchNamedColorOwnershipTest
+    "${ICCDEV_REPO_ROOT}/.github/ci/regression/cmmsearch-namedcolor-ownership.cpp"
+  )
+  target_link_libraries(iccCmmSearchNamedColorOwnershipTest PRIVATE ${TARGET_LIB_ICCPROFLIB})
+  add_dependencies(check iccCmmSearchNamedColorOwnershipTest)
+
+  # This regression's pass/fail signal IS the LeakSanitizer at-exit scan, but the
+  # CI tool-test job and ICCDEV_TEST_ENV both export ASAN_OPTIONS=...detect_leaks=0
+  # to silence unrelated leaks in the smoke-tested tools.  Inheriting that would
+  # disable LSan here and let a profile leak pass undetected.  Launch through
+  # `cmake -E env ASAN_OPTIONS=detect_leaks=1` to force leak detection on for
+  # this test's own process.  Set ONLY detect_leaks=1: appending halt_on_error=0
+  # makes the runtime print the leak but exit 0, and a ':' option separator is
+  # mis-parsed and silently disables the check.
+  add_test(
+    NAME iccdev.cmmsearch-namedcolor-ownership
+    COMMAND "${CMAKE_COMMAND}" -E env
+      "ASAN_OPTIONS=detect_leaks=1"
+      "$<TARGET_FILE:iccCmmSearchNamedColorOwnershipTest>"
+      "${ICCDEV_REPO_ROOT}/.github/ci/test-data/fuzz-nmcl-9c09d1e6.icc"
+  )
+  set_tests_properties(iccdev.cmmsearch-namedcolor-ownership PROPERTIES
+    WORKING_DIRECTORY "${ICCDEV_REPO_ROOT}"
+    TIMEOUT 60
+    LABELS "iccdev;iccconnect;search;leak;issue-1332;regression"
+  )
+  if(WIN32)
+    set(_cmmsearch_namedcolor_windows_env_mods
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:iccCmmSearchNamedColorOwnershipTest>"
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:${TARGET_LIB_ICCPROFLIB}>"
+    )
+    foreach(_runtime_path IN LISTS ICCDEV_WINDOWS_RUNTIME_PATHS)
+      list(APPEND _cmmsearch_namedcolor_windows_env_mods
+        "PATH=path_list_prepend:${_runtime_path}")
+    endforeach()
+    set_tests_properties(iccdev.cmmsearch-namedcolor-ownership PROPERTIES
+      ENVIRONMENT_MODIFICATION "${_cmmsearch_namedcolor_windows_env_mods}"
+    )
+  endif()
+endfunction()
+
+# Guards CIccXform::Create(CIccProfile*, CIccTag*) profile ownership (#1308):
+# AddXform hands its owned profile to the tag-based Create overload, which must
+# free it when no xform can be built.  The helper feeds a valid profile plus a
+# NULL tag, so Create takes its failure path; a profile it fails to free is
+# unreachable and reported by the ASan/LSan CI job.
+function(iccdev_add_xform_create_tag_ownership_test)
+  if(NOT TARGET "${TARGET_LIB_ICCPROFLIB}")
+    return()
+  endif()
+
+  iccdev_add_regression_executable(iccXformCreateTagOwnershipTest
+    "${ICCDEV_REPO_ROOT}/.github/ci/regression/xform-create-tag-ownership.cpp"
+  )
+  target_link_libraries(iccXformCreateTagOwnershipTest PRIVATE ${TARGET_LIB_ICCPROFLIB})
+  add_dependencies(check iccXformCreateTagOwnershipTest)
+
+  # This regression's pass/fail signal IS the LeakSanitizer at-exit scan, but the
+  # CI tool-test job and ICCDEV_TEST_ENV both export ASAN_OPTIONS=detect_leaks=0
+  # to silence unrelated leaks in the smoke-tested tools.  Inheriting that would
+  # disable LSan here and make the test a false pass even when the profile leaks.
+  # Force leak detection back on for this test's own process by launching it
+  # through `cmake -E env` (the same override mechanism the script tests use; a
+  # CTest ENVIRONMENT property is NOT reliable for ASAN_OPTIONS here).  Set ONLY
+  # detect_leaks=1: do not append halt_on_error=0 -- with halt_on_error=0 the
+  # runtime still prints the leak but exits 0, so ctest would pass on a real
+  # leak.  Plain detect_leaks=1 makes a detected leak exit non-zero (the failure
+  # signal ctest needs).
+  add_test(
+    NAME iccdev.xform-create-tag-ownership
+    COMMAND "${CMAKE_COMMAND}" -E env
+      "ASAN_OPTIONS=detect_leaks=1"
+      "$<TARGET_FILE:iccXformCreateTagOwnershipTest>"
+      "${ICCDEV_TESTING_DIR}/sRGB_v4_ICC_preference.icc"
+  )
+  set_tests_properties(iccdev.xform-create-tag-ownership PROPERTIES
+    WORKING_DIRECTORY "${ICCDEV_REPO_ROOT}"
+    TIMEOUT 60
+    LABELS "iccdev;cmm;xform;leak;issue-1308;regression"
+  )
+  if(WIN32)
+    set(_xform_create_windows_env_mods
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:iccXformCreateTagOwnershipTest>"
+      "PATH=path_list_prepend:$<TARGET_FILE_DIR:${TARGET_LIB_ICCPROFLIB}>"
+    )
+    foreach(_runtime_path IN LISTS ICCDEV_WINDOWS_RUNTIME_PATHS)
+      list(APPEND _xform_create_windows_env_mods
+        "PATH=path_list_prepend:${_runtime_path}")
+    endforeach()
+    set_tests_properties(iccdev.xform-create-tag-ownership PROPERTIES
+      ENVIRONMENT_MODIFICATION "${_xform_create_windows_env_mods}"
+    )
+  endif()
+endfunction()
+
 function(iccdev_add_fileio_getlength_position_test)
   if(NOT TARGET "${TARGET_LIB_ICCPROFLIB}")
     return()
   endif()
 
-  add_executable(iccFileIoGetLengthPositionTest
+  iccdev_add_regression_executable(iccFileIoGetLengthPositionTest
     "${ICCDEV_REPO_ROOT}/.github/ci/regression/fileio-getlength-position.cpp"
   )
   target_link_libraries(iccFileIoGetLengthPositionTest PRIVATE ${TARGET_LIB_ICCPROFLIB})
@@ -199,7 +352,7 @@ function(iccdev_add_fileio_seek_tell_test)
     return()
   endif()
 
-  add_executable(iccFileIoSeekTellTest
+  iccdev_add_regression_executable(iccFileIoSeekTellTest
     "${ICCDEV_REPO_ROOT}/.github/ci/regression/fileio-seek-tell.cpp"
   )
   target_link_libraries(iccFileIoSeekTellTest PRIVATE ${TARGET_LIB_ICCPROFLIB})
@@ -235,7 +388,7 @@ function(iccdev_add_profile_write_failure_test)
     return()
   endif()
 
-  add_executable(iccProfileWriteFailureTest
+  iccdev_add_regression_executable(iccProfileWriteFailureTest
     "${ICCDEV_REPO_ROOT}/.github/ci/regression/profile-write-failure.cpp"
   )
   target_link_libraries(iccProfileWriteFailureTest PRIVATE ${TARGET_LIB_ICCPROFLIB})
@@ -270,7 +423,7 @@ function(iccdev_add_parser_restore_calls_test)
     return()
   endif()
 
-  add_executable(iccParserRestoreCallsTest
+  iccdev_add_regression_executable(iccParserRestoreCallsTest
     "${ICCDEV_REPO_ROOT}/.github/ci/regression/parser-restore-calls.cpp"
   )
   target_compile_features(iccParserRestoreCallsTest PRIVATE cxx_std_17)
@@ -465,6 +618,9 @@ if(WIN32)
   iccdev_add_profile_write_failure_test()
   iccdev_add_fileio_seek_tell_test()
   iccdev_add_parser_restore_calls_test()
+  iccdev_add_tag_layout_shared_data_test()
+  iccdev_add_cmmsearch_namedcolor_ownership_test()
+  iccdev_add_xform_create_tag_ownership_test()
 
   return()
 endif()
@@ -520,6 +676,9 @@ iccdev_add_fileio_getlength_position_test()
 iccdev_add_profile_write_failure_test()
 iccdev_add_fileio_seek_tell_test()
 iccdev_add_parser_restore_calls_test()
+iccdev_add_tag_layout_shared_data_test()
+iccdev_add_cmmsearch_namedcolor_ownership_test()
+iccdev_add_xform_create_tag_ownership_test()
 
 function(iccdev_add_script_test NAME TIMEOUT LABELS WORKING_DIRECTORY SCRIPT)
   if(NOT EXISTS "${SCRIPT}")
@@ -647,11 +806,43 @@ set_tests_properties(iccdev.json-cfg PROPERTIES
 )
 
 iccdev_add_script_test(
+  iccdev.issue-1230-json-threads-regression
+  60
+  "iccdev;json;cfg;applyprofiles;issue-1230;regression;ubsan"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-issue-1230-json-threads-regression.sh"
+)
+
+iccdev_add_script_test(
   iccdev.issue-1121-json-envvars-regression
   60
   "iccdev;json;cfg;envvars;issue-1121;regression;asan"
   "${ICCDEV_REPO_ROOT}"
   "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-issue-1121-json-envvars-regression.sh"
+)
+
+# Guards iccApplyToLink -PCC profile ownership on its error-exit paths (#1336):
+# drives the AddXform BadSpaceLink path with tracked profiles under LeakSanitizer
+# and fails if a -PCC profile is stranded.  Uses committed test-data profiles, so
+# no generated-profile fixture is required.
+iccdev_add_script_test(
+  iccdev.issue-1336-applytolink-pcc-regression
+  60
+  "iccdev;tools;applytolink;leak;issue-1336;regression;asan"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-issue-1336-applytolink-pcc-regression.sh"
+)
+
+# Guards CIccCmm::CheckPCSConnections CIccPcsXform ownership on its Connect
+# error path (#1337).  Generates two profiles from committed XML, chains them
+# into an unsupported PCS link under LeakSanitizer, and fails on a leak.  No
+# -PCC, so this is independent of the iccApplyToLink #1336 fix.
+iccdev_add_script_test(
+  iccdev.issue-1337-checkpcsconnections-regression
+  120
+  "iccdev;tools;cmm;leak;issue-1337;regression;asan"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-issue-1337-checkpcsconnections-regression.sh"
 )
 
 iccdev_add_script_test(
@@ -926,6 +1117,34 @@ iccdev_add_script_test(
 )
 set_tests_properties(iccdev.profile-visualize-regressions PROPERTIES
   FIXTURES_REQUIRED iccdev_profiles
+)
+
+# #1346: signed atoi() -> unsigned wrap in IccTagXml ParseXml handlers.
+# Replays a PoC profile with a negative cicpFields ColorPrimaries attribute
+# through iccFromXml; under the integer/implicit-conversion sanitizer the test
+# FAILS if UBSan's implicit-integer-sign-change diagnostic reappears, and SKIPS
+# cleanly on a plain (non-sanitizer) build.  Uses a committed PoC, so it needs
+# no generated-profile fixture.
+iccdev_add_script_test(
+  iccdev.issue-1346-imageparse-atoi-unsigned-regression
+  60
+  "iccdev;xml;imageparse;issue-1346;regression;ubsan"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-issue-1346-imageparse-atoi-unsigned-regression.sh"
+)
+
+# Replays the #1342 / #1343 fuzz PoCs (negative SeamlessIndicator) through
+# iccFromXml and fails if the signed->unsigned implicit conversion in the
+# Embedded Height/Normal image ParseXml() handlers reappears.  Meaningful only
+# under the integer/implicit-conversion sanitizer build (the script skips
+# cleanly otherwise), so it carries the ubsan label.  No profile fixture needed
+# -- the trigger XML files are committed test data.
+iccdev_add_script_test(
+  iccdev.issue-1342-1343-imageparse-signed-unsigned-regression
+  120
+  "iccdev;imageparse;signed-unsigned;regression;ubsan"
+  "${ICCDEV_REPO_ROOT}"
+  "${ICCDEV_REPO_ROOT}/.github/scripts/iccdev-issue-1342-1343-imageparse-signed-unsigned-regression.sh"
 )
 
 # Describe sink + options API smoke test. Verifies byte-equivalence

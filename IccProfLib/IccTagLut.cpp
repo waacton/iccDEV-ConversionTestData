@@ -360,9 +360,16 @@ void CIccTagCurve::Describe(std::string &sDescription, int nVerboseness)
     if (nVerboseness > 75) {
       sDescription += "IN OUT\n";
 
+      // CWE-400/834: SetSize() caps m_nSize at nMaxCurveEntries and allocates
+      // m_Curve to match; assert that bound locally so the table walk has an
+      // explicit limit.
+      const icUInt32Number nMaxCurveEntries = 65536;
+      if (m_nSize > nMaxCurveEntries)
+        return;
+
       for (icUInt32Number i=0; i<m_nSize; i++) {
         ptr = buf;
-        
+
         icFloatNumber fraction = (m_nSize > 1) ? ((icFloatNumber)i/(m_nSize-1)) : 1.0f;
         icColorValue(buf, bufSize, fraction, icSigMCH1Data, 1);
         ptr += strlen(buf);
@@ -424,6 +431,13 @@ void CIccTagCurve::DumpLut(std::string &sDescription, const icChar *szName,
       sDescription += "IN OUT\n";
 
       sDescription.reserve(sDescription.size() + m_nSize * 20);
+
+      // CWE-400/834: SetSize() caps m_nSize at nMaxCurveEntries and allocates
+      // m_Curve to match; assert that bound locally so the table walk has an
+      // explicit limit.
+      const icUInt32Number nMaxCurveEntries = 65536;
+      if (m_nSize > nMaxCurveEntries)
+        return;
 
       for (i=0; i<(int)m_nSize; i++) {
         ptr = buf;
@@ -571,6 +585,13 @@ bool CIccTagCurve::IsIdentity()
     return  IsUnity(icFloatNumber(m_Curve[0]*65535.0/256.0));
   }
 
+  // CWE-400/834: SetSize() caps m_nSize at nMaxCurveEntries and allocates m_Curve
+  // to match; assert that bound locally so the table walk has an explicit upper
+  // limit.
+  const icUInt32Number nMaxCurveEntries = 65536;
+  if (m_nSize > nMaxCurveEntries)
+    return false;
+
   icUInt32Number i;
   for (i=0; i<m_nSize; i++) {
     icFloatNumber fraction = (m_nMaxIndex > 0) ? ((icFloatNumber)i/m_nMaxIndex) : 1.0f;
@@ -661,6 +682,24 @@ icValidateStatus CIccTagCurve::Validate(std::string sigPath, std::string &sRepor
           sReport += " - Curve cannot be accurately inverted.\n";
           rv = icMaxStatus(rv, icValidateWarning);
         }
+      }
+    }
+    else if (m_nSize==1) {
+      // A single-entry curve encodes a gamma value (Y = X^gamma). A gamma of
+      // zero collapses the response to a constant, and a gamma pinned at the
+      // maximum encodable value (~256) collapses it to a near-step function;
+      // both produce an unusable TRC. The specification does not explicitly
+      // forbid these, so report them as warnings rather than non-compliant.
+      if (m_Curve && (m_Curve[0]<=0.0 || m_Curve[0]>=1.0)) {
+        icChar gbuf[160];
+        icFloatNumber dGamma = (icFloatNumber)(m_Curve[0] * 65535.0 / 256.0);
+        snprintf(gbuf, sizeof(gbuf),
+                 " - Degenerate gamma value (%.1f) produces an unusable tone response curve.\n",
+                 (double)dGamma);
+        sReport += icMsgValidateWarning;
+        sReport += sSigPathName;
+        sReport += gbuf;
+        rv = icMaxStatus(rv, icValidateWarning);
       }
     }
   }
@@ -1342,6 +1381,7 @@ bool CIccTagSegmentedCurve::Read(icUInt32Number size, CIccIO *pIO)
      return true;
    }
 
+   delete pCurve;
    return false;
 }
 
@@ -1911,11 +1951,20 @@ bool CIccCLUT::Init(const icUInt8Number *pGridPoints, icUInt32Number nMaxSize, i
   m_DimSize[i] = m_nOutput;
   nNumPoints = m_GridPoints[i];
   for (i--; i>=0; i--) {
-    m_DimSize[i] = m_DimSize[i+1] * m_GridPoints[i+1];
+    size_t dim1 = m_DimSize[i+1];
+    size_t fullSize = dim1 * m_GridPoints[i+1];
+    if (fullSize > 0xFFFFFFFFu)
+        return false;
+    m_DimSize[i] = (icUInt32Number)fullSize;
     nNumPoints *= m_GridPoints[i];
-    if (nMaxSize && nNumPoints * m_nOutput * nBytesPerPoint > nMaxSize)
+    // carefullly protect against 64 bit overflow
+    if (nMaxSize && (nNumPoints > nMaxSize || nNumPoints * m_nOutput > nMaxSize
+            || nNumPoints * m_nOutput * nBytesPerPoint > nMaxSize) )
       return false;
   }
+
+  if (nNumPoints > 0xFFFFFFFFu)
+    return false;
   m_nNumPoints = (icUInt32Number)nNumPoints;
 
   // Use 64-bit math to catch overflows even when no nMaxSize was
@@ -2341,6 +2390,11 @@ void CIccCLUT::DumpLut(IDescribeSink &sink, const icChar *szName,
 void CIccCLUT::Begin()
 {
   int i;
+  // CWE-400/834: m_nInput indexes the fixed 16-entry m_GridPoints/m_MaxGridPoint/
+  // m_nPower arrays and drives m_nNodes = (1<<m_nInput). Init() already rejects
+  // m_nInput>16 on load; assert the bound locally so it is explicit at point of use.
+  if (m_nInput > 16)
+    return;
   for (i=0; i<m_nInput; i++) {
     m_MaxGridPoint[i] = m_GridPoints[i] - 1;
   }
@@ -2669,6 +2723,11 @@ void CIccCLUT::Interp2d(icFloatNumber *destPixel, const icFloatNumber *srcPixel)
  */
 void CIccCLUT::Interp3dTetra(icFloatNumber *destPixel, const icFloatNumber *srcPixel) const
 {
+  // CWE-400/834: m_nOutput controls the destPixel write loop below. Valid LUT
+  // profiles cap output channels at <=16 (the read path rejects larger); guard
+  // locally so the bound is explicit even if the field is corrupted in memory.
+  if (m_nOutput > 16)
+    return;
   icUInt8Number mx = m_MaxGridPoint[0];
   icUInt8Number my = m_MaxGridPoint[1];
   icUInt8Number mz = m_MaxGridPoint[2];
@@ -3314,6 +3373,19 @@ void CIccCLUT::InterpND(icFloatNumber *destPixel, const icFloatNumber *srcPixel,
   icFloatNumber* s = pApply->m_s;
   icUInt32Number* ig = pApply->m_ig;
 
+  // CWE-400/834: m_nInput drives the grid loop below and m_nNodes = (1<<m_nInput)
+  // used for the df[] loop. Input channels are capped at <=16 by Init() on load;
+  // guard locally so both bounds are explicit at point of use.
+  if (m_nInput > 16)
+    return;
+
+  // CWE-400/CWE-834: m_nNodes == (1<<m_nInput) and indexes the fixed df[]/m_nOffset
+  // arrays; assert the derived upper bound (m_nInput<=16 => m_nNodes<=65536) on the
+  // field itself so the node walks below have an explicit limit.
+  const icUInt32Number nMaxNodes = 65536;
+  if (m_nNodes > nMaxNodes)
+    return;
+
   for (i=0; i<m_nInput; i++) {
     g[i] = m_UnitClipFunc(srcPixel[i]) * m_MaxGridPoint[i];
     if (g[i] < 0)
@@ -3608,9 +3680,15 @@ void CIccMBB::Cleanup()
 {
   int i;
 
+  // CWE-400/834: the curve-pointer arrays are allocated to m_nInput/m_nOutput at
+  // load (both capped at <=16 by the lut tag read path). Clamp the delete loops to
+  // the array bound so a corrupted channel count can never walk past the allocation.
+  int nIn  = (m_nInput  > 16) ? 16 : m_nInput;
+  int nOut = (m_nOutput > 16) ? 16 : m_nOutput;
+
   if (IsInputMatrix()) {
     if (m_CurvesB) {
-      for (i=0; i<m_nInput; i++)
+      for (i=0; i<nIn; i++)
         delete m_CurvesB[i];
 
       delete [] m_CurvesB;
@@ -3618,7 +3696,7 @@ void CIccMBB::Cleanup()
     }
 
     if (m_CurvesM) {
-      for (i=0; i<m_nInput; i++)
+      for (i=0; i<nIn; i++)
         delete m_CurvesM[i];
 
       delete [] m_CurvesM;
@@ -3627,7 +3705,7 @@ void CIccMBB::Cleanup()
 
 
     if (m_CurvesA) {
-      for (i=0; i<m_nOutput; i++)
+      for (i=0; i<nOut; i++)
         delete m_CurvesA[i];
 
       delete [] m_CurvesA;
@@ -3637,7 +3715,7 @@ void CIccMBB::Cleanup()
   }
   else {
     if (m_CurvesA) {
-      for (i=0; i<m_nInput; i++)
+      for (i=0; i<nIn; i++)
         delete m_CurvesA[i];
 
       delete [] m_CurvesA;
@@ -3645,7 +3723,7 @@ void CIccMBB::Cleanup()
     }
 
     if (m_CurvesM) {
-      for (i=0; i<m_nOutput; i++)
+      for (i=0; i<nOut; i++)
         delete m_CurvesM[i];
 
       delete [] m_CurvesM;
@@ -3653,7 +3731,7 @@ void CIccMBB::Cleanup()
     }
 
     if (m_CurvesB) {
-      for (i=0; i<m_nOutput; i++)
+      for (i=0; i<nOut; i++)
         delete m_CurvesB[i];
 
       delete [] m_CurvesB;
@@ -3951,7 +4029,11 @@ icValidateStatus CIccMBB::Validate(std::string sigPath, std::string &sReport, co
       if (m_nInput!=nInput) {
         sReport += icMsgValidateCriticalError;
         sReport += sSigPathName;
-        sReport += " - Incorrect number of input channels.\n";
+        sReport += " - Incorrect number of input channels (";
+        sReport += std::to_string(nInput);
+        sReport += ", expected ";
+        sReport += std::to_string(m_nInput);
+        sReport += " from tag).\n";
         rv = icMaxStatus(rv, icValidateCriticalError);
       }
 
@@ -3959,7 +4041,11 @@ icValidateStatus CIccMBB::Validate(std::string sigPath, std::string &sReport, co
       if (m_nOutput!=nOutput) {
         sReport += icMsgValidateCriticalError;
         sReport += sSigPathName;
-        sReport += " - Incorrect number of output channels.\n";
+        sReport += " - Incorrect number of output channels (";
+        sReport += std::to_string(nOutput);
+        sReport += ", expected ";
+        sReport += std::to_string(m_nOutput);
+        sReport += " from tag).\n";
         rv = icMaxStatus(rv, icValidateCriticalError);
       }
 
@@ -3974,7 +4060,11 @@ icValidateStatus CIccMBB::Validate(std::string sigPath, std::string &sReport, co
       if (m_nInput!=nInput) {
         sReport += icMsgValidateCriticalError;
         sReport += sSigPathName;
-        sReport += " - Incorrect number of input channels.\n";
+        sReport += " - Incorrect number of input channels (";
+        sReport += std::to_string(nInput);
+        sReport += ", expected ";
+        sReport += std::to_string(m_nInput);
+        sReport += " from tag).\n";
         rv = icMaxStatus(rv, icValidateCriticalError);
       }
 
@@ -3982,7 +4072,11 @@ icValidateStatus CIccMBB::Validate(std::string sigPath, std::string &sReport, co
       if (m_nOutput!=nOutput) {
         sReport += icMsgValidateCriticalError;
         sReport += sSigPathName;
-        sReport += " - Incorrect number of output channels.\n";
+        sReport += " - Incorrect number of output channels (";
+        sReport += std::to_string(nOutput);
+        sReport += ", expected ";
+        sReport += std::to_string(m_nOutput);
+        sReport += " from tag).\n";
         rv = icMaxStatus(rv, icValidateCriticalError);
       }
 
@@ -3997,7 +4091,11 @@ icValidateStatus CIccMBB::Validate(std::string sigPath, std::string &sReport, co
     if (m_nInput != nInput) {
       sReport += icMsgValidateCriticalError;
       sReport += sSigPathName;
-      sReport += " - Incorrect number of input channels.\n";
+      sReport += " - Incorrect number of input channels (";
+      sReport += std::to_string(nInput);
+      sReport += ", expected ";
+      sReport += std::to_string(m_nInput);
+      sReport += " from tag).\n";
       rv = icMaxStatus(rv, icValidateCriticalError);
     }
 
@@ -4005,7 +4103,11 @@ icValidateStatus CIccMBB::Validate(std::string sigPath, std::string &sReport, co
     if (m_nOutput != nOutput) {
       sReport += icMsgValidateCriticalError;
       sReport += sSigPathName;
-      sReport += " - Incorrect number of output channels.\n";
+      sReport += " - Incorrect number of output channels (";
+      sReport += std::to_string(nOutput);
+      sReport += ", expected ";
+      sReport += std::to_string(m_nOutput);
+      sReport += " from tag).\n";
       rv = icMaxStatus(rv, icValidateCriticalError);
     }
 
@@ -4017,7 +4119,11 @@ icValidateStatus CIccMBB::Validate(std::string sigPath, std::string &sReport, co
       if (m_nInput!=nInput) {
         sReport += icMsgValidateCriticalError;
         sReport += sSigPathName;
-        sReport += " - Incorrect number of input channels.\n";
+        sReport += " - Incorrect number of input channels (";
+        sReport += std::to_string(nInput);
+        sReport += ", expected ";
+        sReport += std::to_string(m_nInput);
+        sReport += " from tag).\n";
         rv = icMaxStatus(rv, icValidateCriticalError);
       }
 
@@ -4025,7 +4131,11 @@ icValidateStatus CIccMBB::Validate(std::string sigPath, std::string &sReport, co
       if (m_nOutput!=nOutput) {
         sReport += icMsgValidateCriticalError;
         sReport += sSigPathName;
-        sReport += " - Incorrect number of output channels.\n";
+        sReport += " - Incorrect number of output channels (";
+        sReport += std::to_string(nOutput);
+        sReport += ", expected ";
+        sReport += std::to_string(m_nOutput);
+        sReport += " from tag).\n";
         rv = icMaxStatus(rv, icValidateCriticalError);
       }
 
@@ -5733,7 +5843,9 @@ icValidateStatus CIccTagLut16::Validate(std::string sigPath, std::string &sRepor
               if (nCurveEntries < 2 || nCurveEntries > 4096) {
                 sReport += icMsgValidateCriticalError;
                 sReport += sSigPathName;
-                sReport += " - lut16Type input tables require 2 to 4096 entries.\n";
+                sReport += " - lut16Type input tables require 2 to 4096 entries, not ";
+                sReport += std::to_string(nCurveEntries);
+                sReport += "\n";
                 rv = icMaxStatus(rv, icValidateCriticalError);
               }
             }
@@ -5775,7 +5887,9 @@ icValidateStatus CIccTagLut16::Validate(std::string sigPath, std::string &sRepor
               if (nCurveEntries < 2 || nCurveEntries > 4096) {
                 sReport += icMsgValidateCriticalError;
                 sReport += sSigPathName;
-                sReport += " - lut16Type output tables require 2 to 4096 entries.\n";
+                sReport += " - lut16Type output tables require 2 to 4096 entries, not ";
+                sReport += std::to_string(nCurveEntries);
+                sReport += "\n";
                 rv = icMaxStatus(rv, icValidateCriticalError);
               }
             }
@@ -6176,6 +6290,10 @@ void CIccTagGamutBoundaryDesc::Describe(std::string &sDescription, int nVerbosen
 		    sDescription += buf;
 	    }
 	
+	    // CWE-400/834: m_Triangles is allocated to m_NumberOfTriangles at load and
+	    // the read path bounds that count by the tag size (sizeof(triangle)*count
+	    // <= tag size). Guard against a failed nothrow allocation before walking it.
+	    if (m_Triangles)
 	    for (int i=0; i<m_NumberOfTriangles; i++)
 	    {
             snprintf(buf,bufSize, "V1 = %u\tV2 = %u\tV3 = %u\n",
